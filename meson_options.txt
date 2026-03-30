@@ -1,0 +1,197 @@
+option(
+    'build-mctp-i3c-daemon',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable building the mctp-i3c-daemon application')
+
+# PCIe discovery delay time in seconds (default: 180 = 3 minutes)
+option(
+    'pcie-discovery-delay-time',
+    type: 'integer',
+    value: 180,
+    description: 'PCIe discovery cooldown delay time in seconds')
+
+option(
+    'aspeed-soc',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable Aspeed SoC-specific implementation features')
+
+option(
+    'aspeed-2700-soc',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable Aspeed 2700 SoC-specific implementation features')
+
+option(
+    'nuvoton-soc',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable Nuvoton SoC-specific implementation features')
+
+option(
+    'client-socket-interface',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable Client Socket Interface support')
+
+option(
+    'build-reactor',
+    type: 'feature',
+    value: 'enabled',
+    description: 'Enable/Disable building the mctpreactor application')
+
+option(
+    'platform-soc',
+    type: 'combo',
+    choices: ['aspeed-2600', 'aspeed-2700', 'nuvoton'],
+    value: 'aspeed-2600',
+    description: 'Platform SoC type for I3C')
+
+option(
+    'mctp-i2c',
+    type: 'feature',
+    value: 'enabled',
+    description: 'Enable/Disable MCTP I2C transport support')
+
+option(
+    'mctp-i3c',
+    type: 'feature',
+    value: 'enabled',
+    description: 'Enable/Disable MCTP I3C transport support')
+
+option(
+    'mctp-pcie',
+    type: 'feature',
+    value: 'enabled',
+    description: 'Enable/Disable MCTP PCIe transport support')
+
+option(
+    'mctp-pcie-role',
+    type: 'combo',
+    choices: ['endpoint', 'bus-owner'],
+    value: 'endpoint',
+    description: 'MCTP PCIe role: endpoint or bus-owner')
+
+option(
+    'mctp-usb',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable MCTP USB transport support')
+
+option(
+    'mctp-usb-hotplug',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable/Disable MCTP USB hotplug support')
+
+option(
+    'mctp-i2c-arp',
+    type: 'feature',
+    value: 'enabled',
+    description: 'Enable/Disable MCTP I2C ARP mode support')
+
+option(
+    'default-local-eid',
+    type: 'integer',
+    min: 8,
+    max: 254,
+    value: 10,
+    description: 'Default local EID for MCTP endpoints (0x0a = 10)')
+
+option(
+    'mctp-i2c-net',
+    type: 'integer',
+    min: 1,
+    value: 1,
+    description: 'Default MCTP network number for I2C transport')
+
+option(
+    'mctp-i2c-whitelist',
+    type: 'array',
+    value: [],
+    description: 'Default I2C address whitelist for MCTP device discovery (hex addresses)')
+
+option(
+    'mctp-i3c-net',
+    type: 'integer',
+    min: 1,
+    value: 8,
+    description: 'Default MCTP network number for I3C transport')
+
+option(
+    'mctp-i3c-busowner-eid',
+    type: 'integer',
+    min: 8,
+    max: 254,
+    value: 10,
+    description: 'Default local EID when BMC is bus owner on I3C')
+
+option(
+    'mctp-i3c-endpoint-eid',
+    type: 'integer',
+    min: 8,
+    max: 254,
+    value: 11,
+    description: 'Default local EID when BMC is endpoint on I3C')
+
+option(
+    'mctp-i3c-devices',
+    type: 'array',
+    value: [],
+    description: 'Default I3C devices list. Each element: name=val|bus_num=val|pid_mask=val|device_pid=val|role=val|is_secondary_bus_owner=val')
+
+option(
+    'mctp-pcie-net',
+    type: 'integer',
+    min: 1,
+    value: 3,
+    description: 'Default MCTP network number for PCIe transport')
+
+option(
+    'mctp-usb-net',
+    type: 'integer',
+    min: 1,
+    value: 5,
+    description: 'Default MCTP network number for USB transport')
+
+option(
+    'mctp-i2c-poll-interval',
+    type: 'integer',
+    min: 1,
+    value: 30,
+    description: 'Default I2C discovery poll interval in seconds')
+
+option(
+    'mctp-i3c-poll-interval',
+    type: 'integer',
+    min: 1,
+    value: 120,
+    description: 'Default I3C discovery poll interval in seconds')
+
+option(
+    'mctp-pcie-poll-interval',
+    type: 'integer',
+    min: 1,
+    value: 60,
+    description: 'Default PCIe discovery poll interval in seconds')
+
+option(
+    'mctp-usb-poll-interval',
+    type: 'integer',
+    min: 1,
+    value: 60,
+    description: 'Default USB discovery poll interval in seconds')
+
+option(
+    'mctp-routing-table-poll-interval',
+    type: 'integer',
+    min: 1,
+    value: 60,
+    description: 'Default routing table poll interval in seconds')
+
+option(
+    'register-reactor-mctp-device-repository',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable I2C discovery to use manageMCTPDevice via MCTPReactor instead of assignEndpoint')

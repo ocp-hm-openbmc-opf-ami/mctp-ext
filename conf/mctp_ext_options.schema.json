@@ -1,0 +1,367 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$defs": {
+        "MCTPGeneralSetting": {
+            "type": "object",
+            "description": "General MCTP settings and routing",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Configuration entry name"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPGeneralSetting",
+                    "description": "Entity Manager configuration type"
+                },
+                "DefaultLocalEid": {
+                    "type": "integer",
+                    "minimum": 8,
+                    "maximum": 254,
+                    "default": 10,
+                    "description": "Default local EID for MCTP endpoints"
+                },
+                "RoutingTablePollingInterval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 60,
+                    "description": "Routing table poll interval in seconds"
+                }
+            },
+            "required": ["Name", "Type"],
+            "additionalProperties": false
+        },
+        "MCTPI2CConfiguration": {
+            "type": "object",
+            "description": "I2C transport configuration",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Configuration entry name"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPI2CConfiguration",
+                    "description": "Entity Manager configuration type"
+                },
+                "Enabled": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled"],
+                    "default": "enabled",
+                    "description": "Enable MCTP I2C transport support"
+                },
+                "Net": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1,
+                    "description": "MCTP network number for I2C transport"
+                },
+                "ArpEnabled": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled"],
+                    "default": "enabled",
+                    "description": "Enable MCTP I2C ARP mode support"
+                },
+                "Whitelist": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F]{1,4}$"
+                    },
+                    "description": "I2C address whitelist for MCTP device discovery (hex)"
+                },
+                "PollingInterval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 30,
+                    "description": "I2C discovery poll interval in seconds"
+                }
+            },
+            "required": ["Name", "Type"],
+            "additionalProperties": false
+        },
+        "MCTPI2CTarget": {
+            "type": "object",
+            "description": "MCTP I2C target device exposed via xyz.openbmc_project.Configuration.MCTPI2CTarget",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Device name identifier"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPI2CTarget",
+                    "description": "Entity Manager configuration type"
+                },
+                "Bus": {
+                    "type": "string",
+                    "description": "I2C bus number"
+                },
+                "Address": {
+                    "type": "string",
+                    "pattern": "^(0x)?[0-9a-fA-F]+$",
+                    "description": "I2C device address (hex)"
+                },
+                "StaticEndpointID": {
+                    "type": "string",
+                    "description": "Static EID to assign to this device"
+                },
+                "PollingInterval": {
+                    "type": "string",
+                    "description": "Polling interval in seconds"
+                },
+                "IgnoreMessageTypes": {
+                    "type": "string",
+                    "description": "Comma-separated MCTP message types to ignore"
+                }
+            },
+            "required": ["Name", "Type", "Bus", "Address"],
+            "additionalProperties": false
+        },
+        "MCTPI3CConfiguration": {
+            "type": "object",
+            "description": "I3C transport configuration",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Configuration entry name"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPI3CConfiguration",
+                    "description": "Entity Manager configuration type"
+                },
+                "SoC": {
+                    "type": "string",
+                    "enum": ["aspeed-2600", "aspeed-2700", "nuvoton"],
+                    "default": "aspeed-2600",
+                    "description": "Target SoC platform selection"
+                },
+                "Enabled": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled"],
+                    "default": "enabled",
+                    "description": "Enable MCTP I3C transport support"
+                },
+                "Net": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 8,
+                    "description": "MCTP network number for I3C transport"
+                },
+                "BusOwnerEID": {
+                    "type": "integer",
+                    "minimum": 8,
+                    "maximum": 254,
+                    "default": 10,
+                    "description": "Default local EID when BMC is bus owner on I3C"
+                },
+                "EndpointEID": {
+                    "type": "integer",
+                    "minimum": 8,
+                    "maximum": 254,
+                    "default": 11,
+                    "description": "Default local EID when BMC is endpoint on I3C"
+                },
+                "PollingInterval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 120,
+                    "description": "I3C discovery poll interval in seconds"
+                }
+            },
+            "required": ["Name", "Type"],
+            "additionalProperties": false
+        },
+        "MCTPI3CTarget": {
+            "type": "object",
+            "description": "MCTP I3C device exposed via xyz.openbmc_project.Configuration.MCTPI3CTarget",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Device name identifier"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPI3CTarget",
+                    "description": "Entity Manager configuration type"
+                },
+                "Bus": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "I3C bus number"
+                },
+                "Role": {
+                    "type": "string",
+                    "enum": ["endpoint", "bus-owner"],
+                    "default": "endpoint",
+                    "description": "Device role: endpoint (BMC is bus owner) or busowner (remote is bus owner)"
+                },
+                "Address": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                    },
+                    "minItems": 6,
+                    "maxItems": 6,
+                    "description": "I3C device PID as 6-byte array (for endpoint devices)"
+                },
+                "PidMask": {
+                    "type": "string",
+                    "pattern": "^(0x)?[0-9a-fA-F]+$|^0$",
+                    "description": "PID mask for bus owner matching (hex, for busowner devices)"
+                },
+                "SecondaryBusOwner": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether this is a secondary bus owner"
+                },
+                "I3CTarget": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether the remote device is an I3C target (not a bus master)"
+                },
+                "StaticEndpointID": {
+                    "type": "string",
+                    "description": "Static EID to assign to this I3C device"
+                }
+            },
+            "required": ["Name", "Type", "Bus"],
+            "additionalProperties": false
+        },
+        "MCTPPCIeConfiguration": {
+            "type": "object",
+            "description": "PCIe transport configuration",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Configuration entry name"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPPCIeConfiguration",
+                    "description": "Entity Manager configuration type"
+                },
+                "Enabled": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled"],
+                    "default": "enabled",
+                    "description": "Enable MCTP PCIe transport support"
+                },
+                "Net": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 3,
+                    "description": "MCTP network number for PCIe transport"
+                },
+                "Role": {
+                    "type": "string",
+                    "enum": ["endpoint", "bus-owner"],
+                    "default": "endpoint",
+                    "description": "PCIe role: endpoint or bus-owner"
+                },
+                "PollingInterval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 60,
+                    "description": "PCIe discovery poll interval in seconds"
+                }
+            },
+            "required": ["Name", "Type"],
+            "additionalProperties": false
+        },
+        "MCTPUSBConfiguration": {
+            "type": "object",
+            "description": "USB transport configuration",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Configuration entry name"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPUSBConfiguration",
+                    "description": "Entity Manager configuration type"
+                },
+                "Enabled": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled"],
+                    "default": "disabled",
+                    "description": "Enable MCTP USB transport support"
+                },
+                "Net": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5,
+                    "description": "MCTP network number for USB transport"
+                },
+                "Hotplug": {
+                    "type": "string",
+                    "enum": ["enabled", "disabled"],
+                    "default": "disabled",
+                    "description": "Enable MCTP USB hotplug support"
+                },
+                "PollingInterval": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 60,
+                    "description": "USB discovery poll interval in seconds"
+                }
+            },
+            "required": ["Name", "Type"],
+            "additionalProperties": false
+        },
+        "MCTPUSBTarget": {
+            "type": "object",
+            "description": "MCTP USB target device exposed via xyz.openbmc_project.Configuration.MCTPUSBTarget",
+            "properties": {
+                "Name": {
+                    "type": "string",
+                    "description": "Device name identifier"
+                },
+                "Type": {
+                    "type": "string",
+                    "const": "MCTPUSBTarget",
+                    "description": "Entity Manager configuration type"
+                },
+                "Interface": {
+                    "type": "string",
+                    "description": "USB interface reference (e.g. $Interface)"
+                },
+                "USBPath": {
+                    "type": "string",
+                    "pattern": "^[0-9]+(-[0-9]+)*$",
+                    "description": "USB device path (e.g. 1-1-2-1-3-1)"
+                },
+                "OwnEID": {
+                    "type": "string",
+                    "description": "Own EID for the local USB endpoint"
+                },
+                "StaticEndpointID": {
+                    "type": "string",
+                    "description": "Static EID to assign to this device"
+                },
+                "BridgePoolStartEID": {
+                    "type": "string",
+                    "description": "Start of bridged EID pool range"
+                },
+                "BridgePoolEndEID": {
+                    "type": "string",
+                    "description": "End of bridged EID pool range"
+                },
+                "PollingInterval": {
+                    "type": "string",
+                    "description": "Polling interval in seconds"
+                },
+                "IgnoreEIDs": {
+                    "type": "string",
+                    "description": "Comma-separated EIDs to ignore"
+                }
+            },
+            "required": ["Name", "Type", "USBPath"],
+            "additionalProperties": false
+        }
+    }
+}
