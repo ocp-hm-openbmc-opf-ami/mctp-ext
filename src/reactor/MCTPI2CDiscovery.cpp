@@ -887,6 +887,18 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
 
         // Assign endpoint via D-Bus using parent class method
         std::string hexAddr = std::format("{:02x}", nextAddr);
+
+        // Add ARP-assigned address to whitelist so the scan phase can
+        // rediscover the device if endpoint assignment fails here.
+        // ARP physically moved the slave to this address; the scan must
+        // be able to reach it regardless of the original whitelist.
+        if (!isInWhitelist(hexAddr))
+        {
+            whitelist.insert(hexAddr);
+            debug("Added ARP-assigned address 0x{ADDR} to whitelist",
+                  "ADDR", hexAddr);
+        }
+
         std::vector<std::uint8_t> addrVector;
         addrVector.push_back(nextAddr);
 
@@ -1116,53 +1128,78 @@ void MCTPI2CDiscovery::setMuxIdleMode(const MuxIdleModes mode)
                 continue;
             }
 
-            fs::path idlePath = fs::path("/sys/bus/i2c/devices/i2c-" + busStr +
-                                         "/mux_device/idle_state");
-
-            std::error_code ec;
-            if (!fs::exists(idlePath, ec))
+            // Walk up the mux hierarchy to set idle_state at every level
+            std::string currentBus = busStr;
+            while (true)
             {
-                continue;
-            }
+                fs::path idlePath = fs::path("/sys/bus/i2c/devices/i2c-" +
+                                             currentBus +
+                                             "/mux_device/idle_state");
 
-            std::string idlePathStr = idlePath.string();
-
-            if (muxIdleModeMap.count(idlePathStr))
-            {
-                continue;
-            }
-
-            std::string current;
-            {
-                std::ifstream in(idlePath);
-                if (in.good())
+                std::error_code ec;
+                if (!fs::exists(idlePath, ec))
                 {
-                    std::getline(in, current);
+                    break; // Reached root adapter, no more parent mux
                 }
-            }
-            muxIdleModeMap[idlePathStr] = current;
 
-            std::ofstream idleFile(idlePath);
-            if (!idleFile.good())
-            {
-                warning("Failed to open mux idle mode file: {PATH}", "PATH",
-                        idlePathStr);
-                continue;
-            }
+                std::string idlePathStr = idlePath.string();
 
-            idleFile << modeValue;
-            idleFile.close();
+                if (!muxIdleModeMap.count(idlePathStr))
+                {
+                    // First time seeing this mux, save current and set new
+                    std::string current;
+                    {
+                        std::ifstream in(idlePath);
+                        if (in.good())
+                        {
+                            std::getline(in, current);
+                        }
+                    }
+                    muxIdleModeMap[idlePathStr] = current;
 
-            if (idleFile.fail())
-            {
-                warning("Failed to write mux idle mode to {PATH}", "PATH",
-                        idlePathStr);
-            }
-            else
-            {
-                debug("Set mux idle mode to {MODE} for {PATH} (was {PREV})",
-                      "MODE", modeValue, "PATH", idlePathStr, "PREV",
-                      current);
+                    std::ofstream idleFile(idlePath);
+                    if (!idleFile.good())
+                    {
+                        warning("Failed to open mux idle mode file: {PATH}",
+                                "PATH", idlePathStr);
+                    }
+                    else
+                    {
+                        idleFile << modeValue;
+                        idleFile.close();
+
+                        if (idleFile.fail())
+                        {
+                            warning(
+                                "Failed to write mux idle mode to {PATH}",
+                                "PATH", idlePathStr);
+                        }
+                        else
+                        {
+                            debug(
+                                "Set mux idle mode to {MODE} for {PATH} (was {PREV})",
+                                "MODE", modeValue, "PATH", idlePathStr,
+                                "PREV", current);
+                        }
+                    }
+                }
+
+                fs::path muxDevLink = fs::path("/sys/bus/i2c/devices/i2c-" +
+                                               currentBus + "/mux_device");
+                fs::path resolvedMux = fs::canonical(muxDevLink, ec);
+                if (ec)
+                {
+                    break;
+                }
+
+                std::string muxDevName = resolvedMux.filename().string();
+                auto dashPos = muxDevName.find('-');
+                if (dashPos == std::string::npos)
+                {
+                    break;
+                }
+
+                currentBus = muxDevName.substr(0, dashPos);
             }
         }
 

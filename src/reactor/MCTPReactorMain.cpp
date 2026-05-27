@@ -296,7 +296,12 @@ int main(int /*argc*/, char* /*argv*/[])
 
     auto entityManagerNameLostMatch = sdbusplus::bus::match_t(
         static_cast<sdbusplus::bus_t&>(*systemBus), entityManagerNameLostSpec,
-        std::bind_front(exitReactor, &io));
+        [](sdbusplus::message_t& msg) {
+            auto name = msg.unpack<std::string>();
+            warning(
+                "Dependency '{SERVICE_NAME}' left the bus, but mctpreactor will continue running",
+                "SERVICE_NAME", name);
+        });
 
     const std::string mctpdNameLostSpec =
         rules::nameOwnerChanged(mctp::dbus::service.data());
