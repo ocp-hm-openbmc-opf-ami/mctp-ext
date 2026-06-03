@@ -62,6 +62,7 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     {
         nextArpAddress = arpStartAddress;
         processedBuses.clear();
+        staleArpAddresses.clear();
     }
 
   private:
@@ -83,10 +84,16 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     static constexpr std::uint8_t minBusNum = 16;
 
     // ARP configuration
-    std::set<std::uint8_t> processedBuses; // Buses that have completed ARP
+    std::set<std::uint8_t> processedBuses; // Buses that have had Prepare ARP sent
     std::uint8_t nextArpAddress = arpStartAddress; // Current next ARP address (in-memory)
     static constexpr std::uint8_t arpDefaultAddress = 0x61;
     static constexpr std::uint8_t arpStartAddress = 0x13; // 19 in decimal
+
+    // Addresses that ARP has moved devices AWAY from (stale in this cycle)
+    std::set<std::string> staleArpAddresses;
+
+    // Addresses that ARP already handled this cycle (avoid Phase 3 re-assignment)
+    std::set<std::string> arpAssignedThisCycle;
 
     // Mux idle mode tracking
     std::unordered_map<std::string, std::string> muxIdleModeMap;
@@ -203,6 +210,13 @@ class MCTPI2CDiscovery : public MCTPDiscovery
                       std::vector<std::uint8_t>& readBuffer);
 
     /**
+     * @brief Write then read using an already-open fd (for ARP sequence)
+     */
+    bool i2cWriteReadFd(int fd, std::uint8_t addr,
+                         const std::vector<std::uint8_t>& writeBuffer,
+                         std::vector<std::uint8_t>& readBuffer);
+
+    /**
      * @brief Check if a bus/address is configured with a static EID
      * @param busNum I2C bus number
      * @param hexAddr Hex string of the I2C address
@@ -210,6 +224,13 @@ class MCTPI2CDiscovery : public MCTPDiscovery
      */
     bool isConfiguredStaticDevice(std::uint8_t busNum,
                                   const std::string& hexAddr) const;
+
+    /**
+     * @brief Remove MCTP neighbor at a given address on an interface
+     * @return true if a neighbor was found and removed
+     */
+    bool removeNeighborByAddress(const std::string& ifname,
+                                 const std::string& hexAddr);
 
     /**
      * @brief Setup and monitor mux idle modes

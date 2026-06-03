@@ -35,6 +35,10 @@ extern "C" {
 #include <fcntl.h>
 #include <errno.h>
 
+#ifndef AF_MCTP
+#define AF_MCTP 45
+#endif
+
 PHOSPHOR_LOG2_USING;
 
 // Forbidden I2C addresses (reserved, reserved, reserved, etc.)
@@ -62,6 +66,13 @@ void MCTPI2CDiscovery::run()
 {
     debug("=== Starting I2C Discovery ===");
 
+    // Clear per-cycle tracking
+    staleArpAddresses.clear();
+    arpAssignedThisCycle.clear();
+
+    // Phase 0: Validate existing routes FIRST (remove stale endpoints)
+    validateExistingRoutes();
+
     // Phase 1: If ARP mode enabled, perform ARP assignment
     if (config.arpEnabled)
     {
@@ -79,9 +90,6 @@ void MCTPI2CDiscovery::run()
     // Phase 3: Perform hotplug discovery for remaining devices
     debug("Performing I2C hotplug discovery...");
     scanForNewDevices();
-
-    // Phase 4: Always validate existing routes
-    validateExistingRoutes();
 
     debug("=== I2C Discovery Complete ===");
 }
@@ -206,6 +214,24 @@ void MCTPI2CDiscovery::scanForNewDevices()
         for (std::uint8_t addr : detectedAddresses)
         {
             std::string hexAddr = std::format("{:02x}", addr);
+
+            // Skip addresses that ARP has moved devices away from
+            if (staleArpAddresses.count(hexAddr))
+            {
+                debug("Skipping stale ARP address 0x{HEX_ADDR} on bus "
+                      "{BUS_NUM} (device was moved by ARP)",
+                      "HEX_ADDR", hexAddr, "BUS_NUM", busNum);
+                continue;
+            }
+
+            // Skip addresses that ARP already assigned and handled this cycle
+            if (arpAssignedThisCycle.count(hexAddr))
+            {
+                debug("Skipping 0x{HEX_ADDR} on bus {BUS_NUM} "
+                      "(already handled by ARP this cycle)",
+                      "HEX_ADDR", hexAddr, "BUS_NUM", busNum);
+                continue;
+            }
 
             // Skip addresses that are configured with a static EID
             if (isConfiguredStaticDevice(busNum, hexAddr))
@@ -532,7 +558,7 @@ std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
         req.hdr.nlmsg_seq = 1;
         req.hdr.nlmsg_pid = getpid();
 
-        req.msg.ndm_family = AF_UNSPEC; // Get all families
+        req.msg.ndm_family = AF_MCTP; // Must use AF_MCTP to query MCTP neighbors
         req.msg.ndm_ifindex = 0;        // All interfaces
 
         // Send request
@@ -682,6 +708,34 @@ bool MCTPI2CDiscovery::neighborExistsViaNetlink(const std::string& hexAddr, cons
     return false;
 }
 
+bool MCTPI2CDiscovery::removeNeighborByAddress(const std::string& ifname,
+                                                const std::string& hexAddr)
+{
+    try
+    {
+        std::uint8_t targetAddr = std::stoi(hexAddr, nullptr, 16);
+        std::vector<MCTPNeighbor> neighbors = getNeighborsViaNetlink();
+
+        for (const auto& neighbor : neighbors)
+        {
+            if (neighbor.device == ifname && neighbor.physAddr == targetAddr &&
+                neighbor.eid > 0)
+            {
+                debug("Removing stale neighbor EID={EID} at 0x{ADDR} on {DEV}",
+                      "EID", neighbor.eid, "ADDR", hexAddr, "DEV", ifname);
+                return removeEndpoint(i2cNet, neighbor.eid);
+            }
+        }
+    }
+    catch (const std::exception& e)
+    {
+        warning("Exception removing neighbor by address: {EXCEPTION}",
+                "EXCEPTION", e);
+    }
+
+    return false;
+}
+
 bool MCTPI2CDiscovery::isDeviceExistsInDBus(std::uint8_t busNum,
                                                const std::string& hexAddr)
 {
@@ -774,12 +828,6 @@ void MCTPI2CDiscovery::performARPAssignment()
             continue;
         }
 
-        if (isBusARPProcessed(busNum))
-        {
-            debug("Bus {BUS} already processed by ARP, skipping", "BUS", busNum);
-            continue;
-        }
-
         performARPOnBus(busNum, device);
     }
 }
@@ -787,111 +835,284 @@ void MCTPI2CDiscovery::performARPAssignment()
 bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
                                           const std::string& device)
 {
+    static constexpr int maxRetries = 3;
+
     debug("Checking for ARP device at 0x{ADDR} on bus {BUS}", "ADDR",
          std::format("{:02x}", arpDefaultAddress), "BUS", busNum);
 
-    // Check if device exists at default address
-    std::string probePath = "/dev/i2c-" + std::to_string(busNum);
-    int probeFd = open(probePath.c_str(), O_RDWR);
-    bool found = false;
-    if (probeFd >= 0)
+    // Open I2C device and keep fd for the entire ARP sequence
+    std::string devPath = "/dev/i2c-" + std::to_string(busNum);
+    int fd = open(devPath.c_str(), O_RDWR);
+    if (fd < 0)
     {
-        found = probeI2CAddress(probeFd, arpDefaultAddress);
-        close(probeFd);
+        warning("Failed to open {PATH}: {ERROR}", "PATH", devPath, "ERROR",
+                strerror(errno));
+        return false;
     }
+
+    // Check if device exists at default ARP address
+    bool found = probeI2CAddress(fd, arpDefaultAddress);
     if (!found)
     {
         debug("No device at default address on bus {BUS}", "BUS", busNum);
+        close(fd);
         return false;
     }
 
     debug("Found device at default address on bus {BUS}. Starting ARP...",
          "BUS", busNum);
 
+    // Enable PEC (Packet Error Checking) for SMBus data integrity
+    if (ioctl(fd, I2C_PEC, 1) < 0)
+    {
+        warning("Failed to enable PEC on bus {BUS}: {ERROR}, continuing without",
+                "BUS", busNum, "ERROR", strerror(errno));
+    }
+
+    // Set slave address for SMBus operations
+    if (ioctl(fd, I2C_SLAVE, arpDefaultAddress) < 0)
+    {
+        warning("Failed to set slave address 0x{ADDR} on bus {BUS}: {ERROR}",
+                "ADDR", std::format("{:02x}", arpDefaultAddress),
+                "BUS", busNum, "ERROR", strerror(errno));
+        close(fd);
+        return false;
+    }
+
     try
     {
-        // Get next available address
-        std::uint8_t nextAddr = getNextARPAddress();
-
-        // Send prepare commands
-        std::vector<std::uint8_t> cmd1 = {0x01};
-        std::vector<std::uint8_t> cmd2 = {0x02};
-
-        if (!i2cWrite(busNum, arpDefaultAddress, cmd1) ||
-            !i2cWrite(busNum, arpDefaultAddress, cmd2))
+        // Step 1: Prepare ARP (0x01) and Reset Device (0x02)
+        // Skip if this bus was already prepared in this session
+        if (!isBusARPProcessed(busNum))
         {
-            warning("Failed to send ARP prepare commands on bus {BUS}", "BUS",
+            bool prepareOk = false;
+            for (int retry = 0; retry < maxRetries && !prepareOk; ++retry)
+            {
+                if (i2c_smbus_write_byte(fd, 0x01) >= 0 &&
+                    i2c_smbus_write_byte(fd, 0x02) >= 0)
+                {
+                    prepareOk = true;
+                }
+                else if (retry < maxRetries - 1)
+                {
+                    debug("ARP prepare retry {RETRY} on bus {BUS}",
+                          "RETRY", retry + 1, "BUS", busNum);
+                    usleep(10000); // 10ms between retries
+                }
+            }
+
+            if (!prepareOk)
+            {
+                warning("Failed to send ARP prepare commands on bus {BUS} "
+                        "after {RETRIES} retries",
+                        "BUS", busNum, "RETRIES", maxRetries);
+                close(fd);
+                return false;
+            }
+            markBusARPProcessed(busNum);
+        }
+        else
+        {
+            debug("Bus {BUS} already prepared, skipping 0x01/0x02", "BUS",
+                  busNum);
+        }
+
+        // Step 2: Get UDID with retry
+        std::vector<std::uint8_t> udid;
+        bool gotUdid = false;
+        std::uint8_t originalAddrByte = 0xFF; // Device's original address from UDID
+
+        for (int retry = 0; retry < maxRetries && !gotUdid; ++retry)
+        {
+            std::vector<std::uint8_t> readCmd = {0x03};
+            std::vector<std::uint8_t> arpData(19, 0);
+
+            if (i2cWriteReadFd(fd, arpDefaultAddress, readCmd, arpData))
+            {
+                // Raw I2C read returns: [0]=block_count [1..16]=UDID [17]=addr [18]=PEC
+                // Byte 17 contains the shifted slave address;
+                // 0xFF means device hasn't been assigned yet (valid for ARP)
+                if (arpData[17] != 0xFF || retry == maxRetries - 1)
+                {
+                    udid.assign(arpData.begin() + 1,
+                                arpData.begin() + 17);
+                    originalAddrByte = arpData[17];
+                    gotUdid = true;
+                }
+            }
+
+            if (!gotUdid && retry < maxRetries - 1)
+            {
+                debug("Get UDID retry {RETRY} on bus {BUS}",
+                      "RETRY", retry + 1, "BUS", busNum);
+                usleep(10000);
+            }
+        }
+
+        if (!gotUdid)
+        {
+            warning("Failed to read UDID from bus {BUS} after {RETRIES} retries",
+                    "BUS", busNum, "RETRIES", maxRetries);
+            close(fd);
+            return false;
+        }
+
+        // Step 3: Validate ASF/MCTP support bit (UDID byte 8, bit 5)
+        // Some devices don't set ASF but still respond to ARP - proceed anyway
+        if (udid.size() > 8 && !(udid[8] & 0x20))
+        {
+            debug("Device on bus {BUS} ASF bit not set in UDID byte 8 "
+                  "(0x{BYTE}), proceeding with ARP anyway",
+                  "BUS", busNum, "BYTE", std::format("{:02x}", udid[8]));
+        }
+
+        // Step 4: Find a free address with collision detection
+        // Temporarily disable PEC for probing, then re-enable
+        ioctl(fd, I2C_PEC, 0);
+
+        std::uint8_t assignAddr = 0;
+        std::uint8_t candidate = getNextARPAddress();
+
+        for (; candidate <= 0x77; ++candidate)
+        {
+            std::string hexCandidate = std::format("{:02x}", candidate);
+            if (isForbidden(hexCandidate))
+            {
+                continue;
+            }
+
+            // Probe to verify address is not already occupied
+            bool occupied = probeI2CAddress(fd, candidate);
+            if (!occupied)
+            {
+                assignAddr = candidate;
+                break;
+            }
+            else
+            {
+                debug("Address 0x{ADDR} on bus {BUS} already occupied, skipping",
+                      "ADDR", hexCandidate, "BUS", busNum);
+            }
+        }
+
+        // Re-enable PEC and restore slave address for assignment
+        ioctl(fd, I2C_PEC, 1);
+        ioctl(fd, I2C_SLAVE, arpDefaultAddress);
+
+        if (assignAddr == 0)
+        {
+            warning("No free address available for ARP on bus {BUS}", "BUS",
                     busNum);
+            close(fd);
             return false;
         }
 
-        // Read 19 bytes (17-byte UDID + 18th byte with shifted address)
-        std::vector<std::uint8_t> readCmd = {0x03};
-        std::vector<std::uint8_t> arpData;
-        arpData.resize(19);
+        debug("Got UDID from bus {BUS}, assigning to 0x{ADDR}", "BUS",
+             busNum, "ADDR", std::format("{:02x}", assignAddr));
 
-        if (!i2cWriteRead(busNum, arpDefaultAddress, readCmd, arpData))
+        // Step 5: Assign address with retry (SMBus Block Write)
+        std::uint8_t shiftedAddr = (assignAddr << 1) | 1;
+        bool assigned = false;
+
+        // Build assign data: 16-byte UDID + shifted address = 17 bytes
+        std::vector<std::uint8_t> assignData;
+        assignData.insert(assignData.end(), udid.begin(), udid.end());
+        assignData.push_back(shiftedAddr);
+
+        for (int retry = 0; retry < maxRetries && !assigned; ++retry)
         {
-            warning("Failed to read UDID from bus {BUS}", "BUS", busNum);
-            return false;
+            if (i2c_smbus_write_block_data(fd, 0x04,
+                    static_cast<__u8>(assignData.size()),
+                    assignData.data()) >= 0)
+            {
+                assigned = true;
+            }
+            else if (retry < maxRetries - 1)
+            {
+                debug("ARP assign retry {RETRY} on bus {BUS}",
+                      "RETRY", retry + 1, "BUS", busNum);
+                usleep(10000);
+            }
         }
 
-        // Extract 17-byte UDID (first 17 bytes)
-        std::vector<std::uint8_t> udid(arpData.begin(), arpData.begin() + 17);
-
-        debug("Got UDID from bus {BUS}, performing assignment to 0x{ADDR}", "BUS",
-             busNum, "ADDR", std::format("{:02x}", nextAddr));
-
-        // Prepare assignment command: 0x04 + 17-byte UDID + 1-byte shifted address
-        std::vector<std::uint8_t> assignCmd;
-        assignCmd.push_back(0x04);
-        assignCmd.insert(assignCmd.end(), udid.begin(), udid.end());
-
-        // Add shifted address (7-bit address << 1 | 1)
-        std::uint8_t shiftedAddr = (nextAddr << 1) | 1;
-        assignCmd.push_back(shiftedAddr);
-
-        if (!i2cWrite(busNum, arpDefaultAddress, assignCmd))
+        if (!assigned)
         {
-            warning("Failed to send ARP assignment command on bus {BUS}",
-                    "BUS", busNum);
+            warning("Failed to send ARP assignment on bus {BUS} after "
+                    "{RETRIES} retries", "BUS", busNum, "RETRIES", maxRetries);
+            close(fd);
             return false;
         }
 
-        // Wait a bit for device to settle
+        // Wait for device to settle
         usleep(100000); // 100ms
 
-        // Verify by reading from new address
-        std::vector<std::uint8_t> verifyCmd = {shiftedAddr};
-        std::vector<std::uint8_t> verifyData;
-        verifyData.resize(19);
+        // Step 6: Verify assignment with retry
+        bool verified = false;
 
-        if (!i2cWriteRead(busNum, arpDefaultAddress, verifyCmd, verifyData))
+        for (int retry = 0; retry < maxRetries && !verified; ++retry)
         {
-            warning("Failed to verify assignment on bus {BUS}", "BUS", busNum);
+            std::vector<std::uint8_t> verifyCmd = {
+                static_cast<std::uint8_t>((assignAddr << 1) | 0x01)};
+            std::vector<std::uint8_t> verifyData(19, 0);
+
+            if (i2cWriteReadFd(fd, arpDefaultAddress, verifyCmd, verifyData))
+            {
+                // Skip block count byte [0], compare UDID at [1..16]
+                std::vector<std::uint8_t> verifyUdid(
+                    verifyData.begin() + 1, verifyData.begin() + 17);
+                if (udid == verifyUdid &&
+                    (verifyData[17] >> 1) == assignAddr)
+                {
+                    verified = true;
+                }
+            }
+
+            if (!verified && retry < maxRetries - 1)
+            {
+                debug("ARP verify retry {RETRY} on bus {BUS}",
+                      "RETRY", retry + 1, "BUS", busNum);
+                usleep(10000);
+            }
+        }
+
+        if (!verified)
+        {
+            warning("Failed to verify ARP assignment on bus {BUS} after "
+                    "{RETRIES} retries", "BUS", busNum, "RETRIES", maxRetries);
+            close(fd);
             return false;
         }
 
-        // Compare UDIDs
-        std::vector<std::uint8_t> verifyUdid(verifyData.begin(),
-                                              verifyData.begin() + 17);
-        if (udid != verifyUdid)
-        {
-            warning("UDID mismatch after assignment on bus {BUS}", "BUS",
-                    busNum);
-            return false;
-        }
+        close(fd);
 
         debug("Verified assignment on bus {BUS}. Assigning endpoint to 0x{ADDR}",
-             "BUS", busNum, "ADDR", std::format("{:02x}", nextAddr));
+             "BUS", busNum, "ADDR", std::format("{:02x}", assignAddr));
 
-        // Assign endpoint via D-Bus using parent class method
-        std::string hexAddr = std::format("{:02x}", nextAddr);
+        // Clean up stale MCTP neighbor at device's original address
+        // After ARP, the device has moved from originalAddr to assignAddr.
+        // Any existing MCTP endpoint at the original address is now stale.
+        std::uint8_t originalAddr = originalAddrByte >> 1;
+        if (originalAddr != assignAddr && originalAddr > 0x07 &&
+            originalAddr < 0x78 &&
+            !isForbidden(std::format("{:02x}", originalAddr)))
+        {
+            std::string origHexAddr = std::format("{:02x}", originalAddr);
+            staleArpAddresses.insert(origHexAddr);
+            if (removeNeighborByAddress(device, origHexAddr))
+            {
+                debug("Removed stale MCTP endpoint at original address "
+                      "0x{OLD} on {DEV} (device moved to 0x{NEW})",
+                      "OLD", origHexAddr, "DEV", device,
+                      "NEW", std::format("{:02x}", assignAddr));
+            }
+        }
+
+        // Update next address
+        setNextARPAddress(assignAddr + 1);
 
         // Add ARP-assigned address to whitelist so the scan phase can
         // rediscover the device if endpoint assignment fails here.
-        // ARP physically moved the slave to this address; the scan must
-        // be able to reach it regardless of the original whitelist.
+        std::string hexAddr = std::format("{:02x}", assignAddr);
         if (!isInWhitelist(hexAddr))
         {
             whitelist.insert(hexAddr);
@@ -899,31 +1120,29 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
                   "ADDR", hexAddr);
         }
 
-        std::vector<std::uint8_t> addrVector;
-        addrVector.push_back(nextAddr);
+        // Assign endpoint
+        std::vector<std::uint8_t> addrVector = {assignAddr};
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-        manageDeviceViaReactor(busNum, nextAddr, device);
-        // Update next address and mark bus as processed
-        setNextARPAddress(nextAddr + 1);
-        markBusARPProcessed(busNum);
+        manageDeviceViaReactor(busNum, assignAddr, device);
         return true;
 #else
         auto response = assignEndpoint(device, addrVector);
 
         if (response.eid != 0)
         {
-            debug("Successfully assigned endpoint on bus {BUS} at 0x{ADDR}: EID={EID}",
-                 "BUS", busNum, "ADDR", hexAddr, "EID", static_cast<int>(response.eid));
-
-            // Update next address and mark bus as processed
-            setNextARPAddress(nextAddr + 1);
-            markBusARPProcessed(busNum);
+            debug("Successfully assigned endpoint on bus {BUS} at 0x{ADDR}: "
+                  "EID={EID}",
+                 "BUS", busNum, "ADDR", hexAddr,
+                 "EID", static_cast<int>(response.eid));
+            arpAssignedThisCycle.insert(hexAddr);
             return true;
         }
         else
         {
             warning("Failed to assign endpoint on bus {BUS}", "BUS", busNum);
+            // Still mark as assigned-this-cycle to avoid Phase 3 redundant retry
+            arpAssignedThisCycle.insert(hexAddr);
             return false;
         }
 #endif
@@ -932,12 +1151,16 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
     {
         warning("Exception during ARP assignment on bus {BUS}: {EXCEPTION}",
                 "BUS", busNum, "EXCEPTION", e);
+        close(fd);
         return false;
     }
 }
 
 bool MCTPI2CDiscovery::isBusARPProcessed(std::uint8_t busNum)
 {
+    // Tracks whether Prepare ARP (0x01) + Reset Device (0x02) have been
+    // sent to this bus in this session.  Subsequent ARP attempts on the
+    // same bus skip those commands to avoid resetting already-assigned devices.
     return processedBuses.find(busNum) != processedBuses.end();
 }
 
@@ -1050,6 +1273,36 @@ bool MCTPI2CDiscovery::i2cWriteRead(std::uint8_t busNum, std::uint8_t addr,
             "ADDR", std::format("{:02x}", addr), "BUS", busNum, "EXCEPTION", e);
         return false;
     }
+}
+
+bool MCTPI2CDiscovery::i2cWriteReadFd(int fd, std::uint8_t addr,
+                                        const std::vector<std::uint8_t>& writeBuffer,
+                                        std::vector<std::uint8_t>& readBuffer)
+{
+    // Make a mutable copy for ioctl
+    std::vector<std::uint8_t> write_copy = writeBuffer;
+
+    struct i2c_msg msgs[2] = {
+        {
+            .addr = addr,
+            .flags = 0, // Write
+            .len = static_cast<std::uint16_t>(write_copy.size()),
+            .buf = write_copy.data(),
+        },
+        {
+            .addr = addr,
+            .flags = I2C_M_RD,
+            .len = static_cast<std::uint16_t>(readBuffer.size()),
+            .buf = readBuffer.data(),
+        },
+    };
+
+    struct i2c_rdwr_ioctl_data ioctl_data = {
+        .msgs = msgs,
+        .nmsgs = 2,
+    };
+
+    return (ioctl(fd, I2C_RDWR, &ioctl_data) == 2);
 }
 
 bool MCTPI2CDiscovery::isEEPROMAddress(std::uint8_t addr) const
