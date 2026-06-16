@@ -7,33 +7,34 @@
 #include "MCTPReactor.hpp"
 #endif
 
+#include <linux/i2c-dev.h>
+#include <linux/i2c.h>
+#include <linux/if_link.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <unistd.h>
+
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/message.hpp>
 
 #include <array>
-#include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <regex>
 #include <sstream>
-#include <unistd.h>
-
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
-#include <linux/if_link.h>
-#include <linux/i2c-dev.h>
-#include <linux/i2c.h>
-extern "C" {
+extern "C"
+{
 #include <i2c/smbus.h>
 }
+#include <errno.h>
+#include <fcntl.h>
 #include <net/if.h>
 #include <sys/socket.h>
-#include <fcntl.h>
-#include <errno.h>
 
 #ifndef AF_MCTP
 #define AF_MCTP 45
@@ -50,21 +51,21 @@ const std::set<std::string> MCTPI2CDiscovery::forbiddenAddresses = {
 MCTPI2CDiscovery::MCTPI2CDiscovery(
     const std::shared_ptr<sdbusplus::asio::connection>& bus,
     const I2CDiscoveryConfig& cfg) :
-    MCTPDiscovery(bus),
-    config(cfg),
-    i2cNet(cfg.i2cNet)
+    MCTPDiscovery(bus), config(cfg), i2cNet(cfg.i2cNet)
 {
     if (!cfg.whitelist.empty())
     {
         whitelist = cfg.whitelist;
     }
-
-    setMuxIdleMode(MuxIdleModes::muxIdleModeConnect);
 }
 
 void MCTPI2CDiscovery::run()
 {
     debug("=== Starting I2C Discovery ===");
+
+    // Ensure mux idle mode is set to connect; kernel may reset on deferred
+    // probe
+    ensureMuxIdleMode();
 
     // Clear per-cycle tracking
     staleArpAddresses.clear();
@@ -129,14 +130,14 @@ void MCTPI2CDiscovery::validateExistingRoutes()
         if (!responds)
         {
             debug("No response at 0x{HEX_ADDR} on bus {BUS_NUM} (stale "
-                 "endpoint). Removing EID {EID}",
-                 "HEX_ADDR", std::format("{:02x}", neighbor.physAddr),
-                 "BUS_NUM", busNum, "EID", neighbor.eid);
+                  "endpoint). Removing EID {EID}",
+                  "HEX_ADDR", std::format("{:02x}", neighbor.physAddr),
+                  "BUS_NUM", busNum, "EID", neighbor.eid);
 
             if (removeEndpoint(config.i2cNet, neighbor.eid))
             {
                 debug("Successfully removed stale EID {EID}", "EID",
-                     neighbor.eid);
+                      neighbor.eid);
             }
             else
             {
@@ -147,13 +148,13 @@ void MCTPI2CDiscovery::validateExistingRoutes()
         else
         {
             debug("Address 0x{HEX_ADDR} responds on bus {BUS_NUM} (active)",
-                 "HEX_ADDR", std::format("{:02x}", neighbor.physAddr),
-                 "BUS_NUM", busNum);
+                  "HEX_ADDR", std::format("{:02x}", neighbor.physAddr),
+                  "BUS_NUM", busNum);
 
             // Check if endpoint needs syncing
-            std::string epPath = std::string(mctp::dbus::basePath) + "/networks/" +
-                                 std::to_string(i2cNet) + "/endpoints/" +
-                                 std::to_string(neighbor.eid);
+            std::string epPath = std::string(mctp::dbus::basePath) +
+                                 "/networks/" + std::to_string(i2cNet) +
+                                 "/endpoints/" + std::to_string(neighbor.eid);
             try
             {
                 auto method = bus->new_method_call(
@@ -164,11 +165,12 @@ void MCTPI2CDiscovery::validateExistingRoutes()
             catch (const std::exception&)
             {
                 // Endpoint doesn't exist, sync it
-                if (assignEndpointStatic(neighbor.device, neighbor.eid,
-                                         std::format("{:02x}", neighbor.physAddr)))
+                if (assignEndpointStatic(
+                        neighbor.device, neighbor.eid,
+                        std::format("{:02x}", neighbor.physAddr)))
                 {
                     debug("Synced EID {EID} via AssignEndpointStatic", "EID",
-                         neighbor.eid);
+                          neighbor.eid);
                 }
             }
         }
@@ -178,7 +180,7 @@ void MCTPI2CDiscovery::validateExistingRoutes()
 void MCTPI2CDiscovery::scanForNewDevices()
 {
     debug("=== Phase 3: Scanning I2C Links (Buses >= {MIN_BUS})", "MIN_BUS",
-         minBusNum);
+          minBusNum);
 
     std::vector<std::string> devices = getLinksViaNetlink("mctpi2c");
     if (devices.empty())
@@ -199,7 +201,7 @@ void MCTPI2CDiscovery::scanForNewDevices()
         }
 
         debug("Scanning bus {BUS_NUM} ({DEVICE})", "BUS_NUM", busNum, "DEVICE",
-             device);
+              device);
 
         // Ensure interface is up and local EID is configured
         if (!ensureInterfaceReady(device, config.localEid, i2cNet))
@@ -258,7 +260,7 @@ void MCTPI2CDiscovery::scanForNewDevices()
             }
 
             debug("New device at 0x{HEX_ADDR} on {DEVICE}. Assigning...",
-                 "HEX_ADDR", hexAddr, "DEVICE", device);
+                  "HEX_ADDR", hexAddr, "DEVICE", device);
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
             manageDeviceViaReactor(busNum, addr, device);
@@ -270,8 +272,9 @@ void MCTPI2CDiscovery::scanForNewDevices()
 
             if (response.eid != 0)
             {
-                debug("Successfully assigned endpoint for 0x{HEX_ADDR}: EID={EID}",
-                     "HEX_ADDR", hexAddr, "EID", static_cast<int>(response.eid));
+                debug(
+                    "Successfully assigned endpoint for 0x{HEX_ADDR}: EID={EID}",
+                    "HEX_ADDR", hexAddr, "EID", static_cast<int>(response.eid));
             }
             else
             {
@@ -286,7 +289,7 @@ void MCTPI2CDiscovery::scanForNewDevices()
 void MCTPI2CDiscovery::scanConfiguredDevices()
 {
     debug("=== Scanning {COUNT} configured I2C device(s) ===", "COUNT",
-         config.devices.size());
+          config.devices.size());
 
     for (const auto& device : config.devices)
     {
@@ -295,20 +298,21 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
         std::uint8_t addr = 0;
         try
         {
-            busNum = static_cast<std::uint8_t>(
-                std::stoul(device.bus, nullptr, 0));
+            busNum =
+                static_cast<std::uint8_t>(std::stoul(device.bus, nullptr, 0));
             addr = static_cast<std::uint8_t>(
                 std::stoul(device.address, nullptr, 0));
         }
         catch (const std::exception& e)
         {
-            warning("Invalid bus/address for device {NAME}: {ERR}",
-                    "NAME", device.name, "ERR", e);
+            warning("Invalid bus/address for device {NAME}: {ERR}", "NAME",
+                    device.name, "ERR", e);
             continue;
         }
 
         std::string hexAddr = std::format("{:02x}", addr);
-        std::string ifaceName = (busNum == 0) ? "mctpmbox0" : "mctpi2c" + std::to_string(busNum);
+        std::string ifaceName =
+            (busNum == 0) ? "mctpmbox0" : "mctpi2c" + std::to_string(busNum);
 
         // Ensure interface is up and local EID is configured
         if (!ensureInterfaceReady(ifaceName, config.localEid, i2cNet))
@@ -340,8 +344,8 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
             int fd = open(probePath.c_str(), O_RDWR);
             if (fd < 0)
             {
-                warning("Cannot open {PATH} for configured device {NAME}", "PATH",
-                        probePath, "NAME", device.name);
+                warning("Cannot open {PATH} for configured device {NAME}",
+                        "PATH", probePath, "NAME", device.name);
                 continue;
             }
 
@@ -358,8 +362,8 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
         }
 
         debug("Configured device {NAME} found at 0x{ADDR} on {IFACE}. "
-             "Assigning...",
-             "NAME", device.name, "ADDR", hexAddr, "IFACE", ifaceName);
+              "Assigning...",
+              "NAME", device.name, "ADDR", hexAddr, "IFACE", ifaceName);
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
         manageDeviceViaReactor(busNum, addr, ifaceName);
@@ -380,13 +384,13 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
                 continue;
             }
 
-            debug("Using static EID {EID} for configured device {NAME}",
-                 "EID", staticEid, "NAME", device.name);
+            debug("Using static EID {EID} for configured device {NAME}", "EID",
+                  staticEid, "NAME", device.name);
 
             if (assignEndpointStatic(ifaceName, staticEid, hexAddr))
             {
                 debug("Assigned configured device {NAME} with static EID={EID}",
-                     "NAME", device.name, "EID", staticEid);
+                      "NAME", device.name, "EID", staticEid);
             }
             else
             {
@@ -404,7 +408,7 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
             if (response.eid != 0)
             {
                 debug("Assigned configured device {NAME}: EID={EID}", "NAME",
-                     device.name, "EID", static_cast<int>(response.eid));
+                      device.name, "EID", static_cast<int>(response.eid));
             }
             else
             {
@@ -428,8 +432,8 @@ bool MCTPI2CDiscovery::isConfiguredStaticDevice(
 
         try
         {
-            std::uint8_t cfgBus = static_cast<std::uint8_t>(
-                std::stoul(device.bus, nullptr, 0));
+            std::uint8_t cfgBus =
+                static_cast<std::uint8_t>(std::stoul(device.bus, nullptr, 0));
             std::uint8_t cfgAddr = static_cast<std::uint8_t>(
                 std::stoul(device.address, nullptr, 0));
             std::string cfgHexAddr = std::format("{:02x}", cfgAddr);
@@ -558,8 +562,9 @@ std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
         req.hdr.nlmsg_seq = 1;
         req.hdr.nlmsg_pid = getpid();
 
-        req.msg.ndm_family = AF_MCTP; // Must use AF_MCTP to query MCTP neighbors
-        req.msg.ndm_ifindex = 0;        // All interfaces
+        req.msg.ndm_family =
+            AF_MCTP;             // Must use AF_MCTP to query MCTP neighbors
+        req.msg.ndm_ifindex = 0; // All interfaces
 
         // Send request
         struct sockaddr_nl peer = {};
@@ -596,8 +601,7 @@ std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
 
             // Parse netlink messages
             for (struct nlmsghdr* nlh = (struct nlmsghdr*)buffer;
-                 NLMSG_OK(nlh, (unsigned int)len);
-                 nlh = NLMSG_NEXT(nlh, len))
+                 NLMSG_OK(nlh, (unsigned int)len); nlh = NLMSG_NEXT(nlh, len))
             {
                 if (nlh->nlmsg_type == NLMSG_DONE)
                 {
@@ -618,7 +622,8 @@ std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
                 }
 
                 struct ndmsg* ndm = (struct ndmsg*)NLMSG_DATA(nlh);
-                struct rtattr* rta = (struct rtattr*)((char*)ndm + NLMSG_ALIGN(sizeof(*ndm)));
+                struct rtattr* rta =
+                    (struct rtattr*)((char*)ndm + NLMSG_ALIGN(sizeof(*ndm)));
                 int rtlen = NLMSG_PAYLOAD(nlh, sizeof(*ndm));
 
                 MCTPNeighbor neighbor;
@@ -667,9 +672,10 @@ std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
                 if (neighbor.eid > 0 || neighbor.physAddr > 0)
                 {
                     neighbors.push_back(neighbor);
-                    debug("Found neighbor: EID={EID}, Device={DEVICE}, PhysAddr=0x{ADDR}",
-                          "EID", neighbor.eid, "DEVICE", neighbor.device, "ADDR",
-                          std::format("{:02x}", neighbor.physAddr));
+                    debug(
+                        "Found neighbor: EID={EID}, Device={DEVICE}, PhysAddr=0x{ADDR}",
+                        "EID", neighbor.eid, "DEVICE", neighbor.device, "ADDR",
+                        std::format("{:02x}", neighbor.physAddr));
                 }
             }
         }
@@ -685,7 +691,8 @@ std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
     return neighbors;
 }
 
-bool MCTPI2CDiscovery::neighborExistsViaNetlink(const std::string& hexAddr, const std::string& ifname)
+bool MCTPI2CDiscovery::neighborExistsViaNetlink(const std::string& hexAddr,
+                                                const std::string& ifname)
 {
     try
     {
@@ -709,7 +716,7 @@ bool MCTPI2CDiscovery::neighborExistsViaNetlink(const std::string& hexAddr, cons
 }
 
 bool MCTPI2CDiscovery::removeNeighborByAddress(const std::string& ifname,
-                                                const std::string& hexAddr)
+                                               const std::string& hexAddr)
 {
     try
     {
@@ -737,18 +744,20 @@ bool MCTPI2CDiscovery::removeNeighborByAddress(const std::string& ifname,
 }
 
 bool MCTPI2CDiscovery::isDeviceExistsInDBus(std::uint8_t busNum,
-                                               const std::string& hexAddr)
+                                            const std::string& hexAddr)
 {
     try
     {
-        // Get all endpoints under /au/com/codeconstruct/mctp1/networks/1/endpoints
-        std::string endpointsPath = std::string(mctp::dbus::basePath) + "/networks/" +
-                                    std::to_string(i2cNet) + "/endpoints";
+        // Get all endpoints under
+        // /au/com/codeconstruct/mctp1/networks/1/endpoints
+        std::string endpointsPath =
+            std::string(mctp::dbus::basePath) + "/networks/" +
+            std::to_string(i2cNet) + "/endpoints";
 
-        auto method = bus->new_method_call(mctp::dbus::service.data(),
-                                            std::string(mctp::dbus::basePath).c_str(),
-                                            "org.freedesktop.DBus.ObjectManager",
-                                            "GetManagedObjects");
+        auto method = bus->new_method_call(
+            mctp::dbus::service.data(),
+            std::string(mctp::dbus::basePath).c_str(),
+            "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
 
         auto reply = bus->call(method);
 
@@ -766,7 +775,8 @@ bool MCTPI2CDiscovery::isDeviceExistsInDBus(std::uint8_t busNum,
                 continue;
             }
 
-            auto i2cIfaceIt = interfaces.find("xyz.openbmc_project.Inventory.Decorator.I2CDevice");
+            auto i2cIfaceIt = interfaces.find(
+                "xyz.openbmc_project.Inventory.Decorator.I2CDevice");
             if (i2cIfaceIt == interfaces.end())
             {
                 continue;
@@ -806,7 +816,6 @@ bool MCTPI2CDiscovery::isDeviceExistsInDBus(std::uint8_t busNum,
     return false;
 }
 
-
 void MCTPI2CDiscovery::performARPAssignment()
 {
     debug("=== Phase 2: Dynamic ARP Assignment ===");
@@ -833,12 +842,12 @@ void MCTPI2CDiscovery::performARPAssignment()
 }
 
 bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
-                                          const std::string& device)
+                                       const std::string& device)
 {
     static constexpr int maxRetries = 3;
 
     debug("Checking for ARP device at 0x{ADDR} on bus {BUS}", "ADDR",
-         std::format("{:02x}", arpDefaultAddress), "BUS", busNum);
+          std::format("{:02x}", arpDefaultAddress), "BUS", busNum);
 
     // Open I2C device and keep fd for the entire ARP sequence
     std::string devPath = "/dev/i2c-" + std::to_string(busNum);
@@ -860,21 +869,22 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
     }
 
     debug("Found device at default address on bus {BUS}. Starting ARP...",
-         "BUS", busNum);
+          "BUS", busNum);
 
     // Enable PEC (Packet Error Checking) for SMBus data integrity
     if (ioctl(fd, I2C_PEC, 1) < 0)
     {
-        warning("Failed to enable PEC on bus {BUS}: {ERROR}, continuing without",
-                "BUS", busNum, "ERROR", strerror(errno));
+        warning(
+            "Failed to enable PEC on bus {BUS}: {ERROR}, continuing without",
+            "BUS", busNum, "ERROR", strerror(errno));
     }
 
     // Set slave address for SMBus operations
     if (ioctl(fd, I2C_SLAVE, arpDefaultAddress) < 0)
     {
         warning("Failed to set slave address 0x{ADDR} on bus {BUS}: {ERROR}",
-                "ADDR", std::format("{:02x}", arpDefaultAddress),
-                "BUS", busNum, "ERROR", strerror(errno));
+                "ADDR", std::format("{:02x}", arpDefaultAddress), "BUS", busNum,
+                "ERROR", strerror(errno));
         close(fd);
         return false;
     }
@@ -895,8 +905,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
                 }
                 else if (retry < maxRetries - 1)
                 {
-                    debug("ARP prepare retry {RETRY} on bus {BUS}",
-                          "RETRY", retry + 1, "BUS", busNum);
+                    debug("ARP prepare retry {RETRY} on bus {BUS}", "RETRY",
+                          retry + 1, "BUS", busNum);
                     usleep(10000); // 10ms between retries
                 }
             }
@@ -920,7 +930,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         // Step 2: Get UDID with retry
         std::vector<std::uint8_t> udid;
         bool gotUdid = false;
-        std::uint8_t originalAddrByte = 0xFF; // Device's original address from UDID
+        std::uint8_t originalAddrByte =
+            0xFF; // Device's original address from UDID
 
         for (int retry = 0; retry < maxRetries && !gotUdid; ++retry)
         {
@@ -929,13 +940,12 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
 
             if (i2cWriteReadFd(fd, arpDefaultAddress, readCmd, arpData))
             {
-                // Raw I2C read returns: [0]=block_count [1..16]=UDID [17]=addr [18]=PEC
-                // Byte 17 contains the shifted slave address;
-                // 0xFF means device hasn't been assigned yet (valid for ARP)
+                // Raw I2C read returns: [0]=block_count [1..16]=UDID [17]=addr
+                // [18]=PEC Byte 17 contains the shifted slave address; 0xFF
+                // means device hasn't been assigned yet (valid for ARP)
                 if (arpData[17] != 0xFF || retry == maxRetries - 1)
                 {
-                    udid.assign(arpData.begin() + 1,
-                                arpData.begin() + 17);
+                    udid.assign(arpData.begin() + 1, arpData.begin() + 17);
                     originalAddrByte = arpData[17];
                     gotUdid = true;
                 }
@@ -943,16 +953,17 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
 
             if (!gotUdid && retry < maxRetries - 1)
             {
-                debug("Get UDID retry {RETRY} on bus {BUS}",
-                      "RETRY", retry + 1, "BUS", busNum);
+                debug("Get UDID retry {RETRY} on bus {BUS}", "RETRY", retry + 1,
+                      "BUS", busNum);
                 usleep(10000);
             }
         }
 
         if (!gotUdid)
         {
-            warning("Failed to read UDID from bus {BUS} after {RETRIES} retries",
-                    "BUS", busNum, "RETRIES", maxRetries);
+            warning(
+                "Failed to read UDID from bus {BUS} after {RETRIES} retries",
+                "BUS", busNum, "RETRIES", maxRetries);
             close(fd);
             return false;
         }
@@ -990,8 +1001,9 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             }
             else
             {
-                debug("Address 0x{ADDR} on bus {BUS} already occupied, skipping",
-                      "ADDR", hexCandidate, "BUS", busNum);
+                debug(
+                    "Address 0x{ADDR} on bus {BUS} already occupied, skipping",
+                    "ADDR", hexCandidate, "BUS", busNum);
             }
         }
 
@@ -1007,8 +1019,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             return false;
         }
 
-        debug("Got UDID from bus {BUS}, assigning to 0x{ADDR}", "BUS",
-             busNum, "ADDR", std::format("{:02x}", assignAddr));
+        debug("Got UDID from bus {BUS}, assigning to 0x{ADDR}", "BUS", busNum,
+              "ADDR", std::format("{:02x}", assignAddr));
 
         // Step 5: Assign address with retry (SMBus Block Write)
         std::uint8_t shiftedAddr = (assignAddr << 1) | 1;
@@ -1022,15 +1034,15 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         for (int retry = 0; retry < maxRetries && !assigned; ++retry)
         {
             if (i2c_smbus_write_block_data(fd, 0x04,
-                    static_cast<__u8>(assignData.size()),
-                    assignData.data()) >= 0)
+                                           static_cast<__u8>(assignData.size()),
+                                           assignData.data()) >= 0)
             {
                 assigned = true;
             }
             else if (retry < maxRetries - 1)
             {
-                debug("ARP assign retry {RETRY} on bus {BUS}",
-                      "RETRY", retry + 1, "BUS", busNum);
+                debug("ARP assign retry {RETRY} on bus {BUS}", "RETRY",
+                      retry + 1, "BUS", busNum);
                 usleep(10000);
             }
         }
@@ -1038,7 +1050,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         if (!assigned)
         {
             warning("Failed to send ARP assignment on bus {BUS} after "
-                    "{RETRIES} retries", "BUS", busNum, "RETRIES", maxRetries);
+                    "{RETRIES} retries",
+                    "BUS", busNum, "RETRIES", maxRetries);
             close(fd);
             return false;
         }
@@ -1058,10 +1071,9 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             if (i2cWriteReadFd(fd, arpDefaultAddress, verifyCmd, verifyData))
             {
                 // Skip block count byte [0], compare UDID at [1..16]
-                std::vector<std::uint8_t> verifyUdid(
-                    verifyData.begin() + 1, verifyData.begin() + 17);
-                if (udid == verifyUdid &&
-                    (verifyData[17] >> 1) == assignAddr)
+                std::vector<std::uint8_t> verifyUdid(verifyData.begin() + 1,
+                                                     verifyData.begin() + 17);
+                if (udid == verifyUdid && (verifyData[17] >> 1) == assignAddr)
                 {
                     verified = true;
                 }
@@ -1069,8 +1081,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
 
             if (!verified && retry < maxRetries - 1)
             {
-                debug("ARP verify retry {RETRY} on bus {BUS}",
-                      "RETRY", retry + 1, "BUS", busNum);
+                debug("ARP verify retry {RETRY} on bus {BUS}", "RETRY",
+                      retry + 1, "BUS", busNum);
                 usleep(10000);
             }
         }
@@ -1078,15 +1090,17 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         if (!verified)
         {
             warning("Failed to verify ARP assignment on bus {BUS} after "
-                    "{RETRIES} retries", "BUS", busNum, "RETRIES", maxRetries);
+                    "{RETRIES} retries",
+                    "BUS", busNum, "RETRIES", maxRetries);
             close(fd);
             return false;
         }
 
         close(fd);
 
-        debug("Verified assignment on bus {BUS}. Assigning endpoint to 0x{ADDR}",
-             "BUS", busNum, "ADDR", std::format("{:02x}", assignAddr));
+        debug(
+            "Verified assignment on bus {BUS}. Assigning endpoint to 0x{ADDR}",
+            "BUS", busNum, "ADDR", std::format("{:02x}", assignAddr));
 
         // Clean up stale MCTP neighbor at device's original address
         // After ARP, the device has moved from originalAddr to assignAddr.
@@ -1102,8 +1116,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             {
                 debug("Removed stale MCTP endpoint at original address "
                       "0x{OLD} on {DEV} (device moved to 0x{NEW})",
-                      "OLD", origHexAddr, "DEV", device,
-                      "NEW", std::format("{:02x}", assignAddr));
+                      "OLD", origHexAddr, "DEV", device, "NEW",
+                      std::format("{:02x}", assignAddr));
             }
         }
 
@@ -1116,8 +1130,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         if (!isInWhitelist(hexAddr))
         {
             whitelist.insert(hexAddr);
-            debug("Added ARP-assigned address 0x{ADDR} to whitelist",
-                  "ADDR", hexAddr);
+            debug("Added ARP-assigned address 0x{ADDR} to whitelist", "ADDR",
+                  hexAddr);
         }
 
         // Assign endpoint
@@ -1133,15 +1147,16 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         {
             debug("Successfully assigned endpoint on bus {BUS} at 0x{ADDR}: "
                   "EID={EID}",
-                 "BUS", busNum, "ADDR", hexAddr,
-                 "EID", static_cast<int>(response.eid));
+                  "BUS", busNum, "ADDR", hexAddr, "EID",
+                  static_cast<int>(response.eid));
             arpAssignedThisCycle.insert(hexAddr);
             return true;
         }
         else
         {
             warning("Failed to assign endpoint on bus {BUS}", "BUS", busNum);
-            // Still mark as assigned-this-cycle to avoid Phase 3 redundant retry
+            // Still mark as assigned-this-cycle to avoid Phase 3 redundant
+            // retry
             arpAssignedThisCycle.insert(hexAddr);
             return false;
         }
@@ -1180,7 +1195,7 @@ void MCTPI2CDiscovery::setNextARPAddress(std::uint8_t addr)
 }
 
 bool MCTPI2CDiscovery::i2cWrite(std::uint8_t busNum, std::uint8_t addr,
-                                    const std::vector<std::uint8_t>& buffer)
+                                const std::vector<std::uint8_t>& buffer)
 {
     try
     {
@@ -1222,9 +1237,10 @@ bool MCTPI2CDiscovery::i2cWrite(std::uint8_t busNum, std::uint8_t addr,
     }
 }
 
-bool MCTPI2CDiscovery::i2cWriteRead(std::uint8_t busNum, std::uint8_t addr,
-                                        const std::vector<std::uint8_t>& writeBuffer,
-                                        std::vector<std::uint8_t>& readBuffer)
+bool MCTPI2CDiscovery::i2cWriteRead(
+    std::uint8_t busNum, std::uint8_t addr,
+    const std::vector<std::uint8_t>& writeBuffer,
+    std::vector<std::uint8_t>& readBuffer)
 {
     try
     {
@@ -1275,9 +1291,9 @@ bool MCTPI2CDiscovery::i2cWriteRead(std::uint8_t busNum, std::uint8_t addr,
     }
 }
 
-bool MCTPI2CDiscovery::i2cWriteReadFd(int fd, std::uint8_t addr,
-                                        const std::vector<std::uint8_t>& writeBuffer,
-                                        std::vector<std::uint8_t>& readBuffer)
+bool MCTPI2CDiscovery::i2cWriteReadFd(
+    int fd, std::uint8_t addr, const std::vector<std::uint8_t>& writeBuffer,
+    std::vector<std::uint8_t>& readBuffer)
 {
     // Make a mutable copy for ioctl
     std::vector<std::uint8_t> write_copy = writeBuffer;
@@ -1341,7 +1357,7 @@ bool MCTPI2CDiscovery::probeI2CAddress(int fd, std::uint8_t addr)
         }
 
         debug("Advanced probe found responsive I2C device at 0x{ADDR}", "ADDR",
-             std::format("{:02x}", addr));
+              std::format("{:02x}", addr));
         return true;
     }
     catch (const std::exception& e)
@@ -1352,17 +1368,15 @@ bool MCTPI2CDiscovery::probeI2CAddress(int fd, std::uint8_t addr)
     }
 }
 
-void MCTPI2CDiscovery::setMuxIdleMode(const MuxIdleModes mode)
+void MCTPI2CDiscovery::ensureMuxIdleMode()
 {
     namespace fs = std::filesystem;
 
-    const std::string modeValue =
-        (mode == MuxIdleModes::muxIdleModeConnect) ? "-1" : "-2";
+    const std::string desiredValue = "-1"; // muxIdleModeConnect
+    bool anyChanged = false;
 
     try
     {
-        muxIdleModeMap.clear();
-
         for (const auto& link : getLinksViaNetlink("mctpi2c"))
         {
             if (link.size() <= 7)
@@ -1381,64 +1395,54 @@ void MCTPI2CDiscovery::setMuxIdleMode(const MuxIdleModes mode)
                 continue;
             }
 
-            // Walk up the mux hierarchy to set idle_state at every level
+            // Walk up the mux hierarchy to check/set idle_state
             std::string currentBus = busStr;
             while (true)
             {
-                fs::path idlePath = fs::path("/sys/bus/i2c/devices/i2c-" +
-                                             currentBus +
-                                             "/mux_device/idle_state");
+                fs::path idlePath =
+                    fs::path("/sys/bus/i2c/devices/i2c-" + currentBus +
+                             "/mux_device/idle_state");
 
                 std::error_code ec;
                 if (!fs::exists(idlePath, ec))
                 {
-                    break; // Reached root adapter, no more parent mux
+                    break;
                 }
 
                 std::string idlePathStr = idlePath.string();
 
-                if (!muxIdleModeMap.count(idlePathStr))
+                // Read current value
+                std::string current;
                 {
-                    // First time seeing this mux, save current and set new
-                    std::string current;
+                    std::ifstream in(idlePath);
+                    if (in.good())
                     {
-                        std::ifstream in(idlePath);
-                        if (in.good())
-                        {
-                            std::getline(in, current);
-                        }
+                        std::getline(in, current);
                     }
-                    muxIdleModeMap[idlePathStr] = current;
+                }
 
+                // Only write if not already set to desired value
+                if (current != desiredValue)
+                {
                     std::ofstream idleFile(idlePath);
-                    if (!idleFile.good())
+                    if (idleFile.good())
                     {
-                        warning("Failed to open mux idle mode file: {PATH}",
-                                "PATH", idlePathStr);
-                    }
-                    else
-                    {
-                        idleFile << modeValue;
+                        idleFile << desiredValue;
                         idleFile.close();
 
-                        if (idleFile.fail())
+                        if (!idleFile.fail())
                         {
-                            warning(
-                                "Failed to write mux idle mode to {PATH}",
-                                "PATH", idlePathStr);
-                        }
-                        else
-                        {
-                            debug(
-                                "Set mux idle mode to {MODE} for {PATH} (was {PREV})",
-                                "MODE", modeValue, "PATH", idlePathStr,
-                                "PREV", current);
+                            info("Set mux idle_state to {MODE} for {PATH} "
+                                 "(was {PREV})",
+                                 "MODE", desiredValue, "PATH", idlePathStr,
+                                 "PREV", current);
+                            anyChanged = true;
                         }
                     }
                 }
 
-                fs::path muxDevLink = fs::path("/sys/bus/i2c/devices/i2c-" +
-                                               currentBus + "/mux_device");
+                fs::path muxDevLink = fs::path(
+                    "/sys/bus/i2c/devices/i2c-" + currentBus + "/mux_device");
                 fs::path resolvedMux = fs::canonical(muxDevLink, ec);
                 if (ec)
                 {
@@ -1456,19 +1460,20 @@ void MCTPI2CDiscovery::setMuxIdleMode(const MuxIdleModes mode)
             }
         }
 
-        debug("Applied mux idle mode {MODE} to {COUNT} path(s)", "MODE",
-              modeValue, "COUNT", muxIdleModeMap.size());
+        if (anyChanged)
+        {
+            info("Mux idle mode correction applied");
+        }
     }
     catch (const std::exception& e)
     {
-        warning("Exception setting mux idle mode: {EXCEPTION}", "EXCEPTION", e);
+        warning("Exception in ensureMuxIdleMode: {EXCEPTION}", "EXCEPTION", e);
     }
 }
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-void MCTPI2CDiscovery::manageDeviceViaReactor(std::uint8_t busNum,
-                                               std::uint8_t addr,
-                                               const std::string& ifaceName)
+void MCTPI2CDiscovery::manageDeviceViaReactor(
+    std::uint8_t busNum, std::uint8_t addr, const std::string& ifaceName)
 {
     if (!reactor)
     {
@@ -1484,12 +1489,10 @@ void MCTPI2CDiscovery::manageDeviceViaReactor(std::uint8_t busNum,
     {
         auto device = std::make_shared<I2CMCTPDDevice>(bus, busNum, addr);
         std::string path = std::format(
-            "/xyz/openbmc_project/mctp/discovery/i2c/{}/{:02x}",
-            busNum, addr);
+            "/xyz/openbmc_project/mctp/discovery/i2c/{}/{:02x}", busNum, addr);
         debug("Managing device via reactor: bus={BUS}, addr=0x{ADDR}, "
               "path={PATH}",
-              "BUS", busNum, "ADDR", std::format("{:02x}", addr),
-              "PATH", path);
+              "BUS", busNum, "ADDR", std::format("{:02x}", addr), "PATH", path);
         reactor->manageMCTPDevice(path, device);
     }
     catch (const std::exception& e)
@@ -1499,5 +1502,3 @@ void MCTPI2CDiscovery::manageDeviceViaReactor(std::uint8_t busNum,
     }
 }
 #endif
-
-

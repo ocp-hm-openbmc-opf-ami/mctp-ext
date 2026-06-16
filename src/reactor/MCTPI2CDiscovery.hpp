@@ -20,38 +20,41 @@ class MCTPReactor;
 /**
  * @brief Enumeration for I2C Mux idle modes
  */
-enum class MuxIdleModes : uint8_t
-{
-    muxIdleModeConnect = 0,
-    muxIdleModeDisconnect,
-};
 
 /**
  * @brief Structure to hold MCTP neighbor information
  */
 struct MCTPNeighbor
 {
-    std::uint8_t eid = 0;                    // Endpoint ID
-    std::string device;                      // Device name (e.g., "mctpi2c1")
-    std::uint8_t physAddr = 0;               // Physical address (I2C address)
+    std::uint8_t eid = 0;      // Endpoint ID
+    std::string device;        // Device name (e.g., "mctpi2c1")
+    std::uint8_t physAddr = 0; // Physical address (I2C address)
 };
 
 class MCTPI2CDiscovery : public MCTPDiscovery
 {
   public:
-    MCTPI2CDiscovery(
-        const std::shared_ptr<sdbusplus::asio::connection>& bus,
-        const I2CDiscoveryConfig& config);
+    MCTPI2CDiscovery(const std::shared_ptr<sdbusplus::asio::connection>& bus,
+                     const I2CDiscoveryConfig& config);
     ~MCTPI2CDiscovery() override = default;
 
     void run() override;
-    std::string_view name() const override { return "I2C"; }
+    std::string_view name() const override
+    {
+        return "I2C";
+    }
 
     /// Reset ARP state for fresh discovery on host power-on.
-    void onHostOn() override { resetARPState(); }
+    void onHostOn() override
+    {
+        resetARPState();
+    }
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-    void setReactor(const std::shared_ptr<MCTPReactor>& r) { reactor = r; }
+    void setReactor(const std::shared_ptr<MCTPReactor>& r)
+    {
+        reactor = r;
+    }
 #endif
 
     /**
@@ -84,20 +87,23 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     static constexpr std::uint8_t minBusNum = 16;
 
     // ARP configuration
-    std::set<std::uint8_t> processedBuses; // Buses that have had Prepare ARP sent
-    std::uint8_t nextArpAddress = arpStartAddress; // Current next ARP address (in-memory)
+    std::set<std::uint8_t>
+        processedBuses;  // Buses that have had Prepare ARP sent
+    std::uint8_t nextArpAddress =
+        arpStartAddress; // Current next ARP address (in-memory)
     static constexpr std::uint8_t arpDefaultAddress = 0x61;
     static constexpr std::uint8_t arpStartAddress = 0x13; // 19 in decimal
 
     // Addresses that ARP has moved devices AWAY from (stale in this cycle)
     std::set<std::string> staleArpAddresses;
 
-    // Addresses that ARP already handled this cycle (avoid Phase 3 re-assignment)
+    // Addresses that ARP already handled this cycle (avoid Phase 3
+    // re-assignment)
     std::set<std::string> arpAssignedThisCycle;
 
     // Mux idle mode tracking
-    std::unordered_map<std::string, std::string> muxIdleModeMap;
-    
+    void ensureMuxIdleMode();
+
     /**
      * @brief Enhanced I2C address probing with EEPROM support
      * Uses different probe methods based on address type (like SMBusBinding)
@@ -121,9 +127,8 @@ class MCTPI2CDiscovery : public MCTPDiscovery
      * @param endAddr End address (e.g., 0x77)
      * @return Vector of responding addresses
      */
-    std::vector<std::uint8_t> scanI2CRange(std::uint8_t busNum,
-                                           std::uint8_t startAddr,
-                                           std::uint8_t endAddr);
+    std::vector<std::uint8_t> scanI2CRange(
+        std::uint8_t busNum, std::uint8_t startAddr, std::uint8_t endAddr);
 
     /**
      * @brief Get MCTP neighbors using netlink API
@@ -133,7 +138,8 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     /**
      * @brief Check if a neighbor exists using netlink
      */
-    bool neighborExistsViaNetlink(const std::string& hexAddr, const std::string& ifname);
+    bool neighborExistsViaNetlink(const std::string& hexAddr,
+                                  const std::string& ifname);
 
     /**
      * @brief Phase 3: Dynamic ARP-based device assignment
@@ -163,8 +169,7 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     /**
      * @brief Check if device with bus and address exists in D-Bus
      */
-    bool isDeviceExistsInDBus(std::uint8_t busNum,
-                               const std::string& hexAddr);
+    bool isDeviceExistsInDBus(std::uint8_t busNum, const std::string& hexAddr);
 
     /**
      * @brief Phase 1: Validate existing routes
@@ -177,7 +182,8 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     void scanForNewDevices();
 
     /**
-     * @brief Scan configured device list and assign endpoints for undiscovered devices
+     * @brief Scan configured device list and assign endpoints for undiscovered
+     * devices
      */
     void scanConfiguredDevices();
 
@@ -213,14 +219,15 @@ class MCTPI2CDiscovery : public MCTPDiscovery
      * @brief Write then read using an already-open fd (for ARP sequence)
      */
     bool i2cWriteReadFd(int fd, std::uint8_t addr,
-                         const std::vector<std::uint8_t>& writeBuffer,
-                         std::vector<std::uint8_t>& readBuffer);
+                        const std::vector<std::uint8_t>& writeBuffer,
+                        std::vector<std::uint8_t>& readBuffer);
 
     /**
      * @brief Check if a bus/address is configured with a static EID
      * @param busNum I2C bus number
      * @param hexAddr Hex string of the I2C address
-     * @return true if the device is in config.devices with a non-empty staticEndpointId
+     * @return true if the device is in config.devices with a non-empty
+     * staticEndpointId
      */
     bool isConfiguredStaticDevice(std::uint8_t busNum,
                                   const std::string& hexAddr) const;
@@ -231,12 +238,4 @@ class MCTPI2CDiscovery : public MCTPDiscovery
      */
     bool removeNeighborByAddress(const std::string& ifname,
                                  const std::string& hexAddr);
-
-    /**
-     * @brief Setup and monitor mux idle modes
-     * @param mode Desired idle mode
-     */
-    void setMuxIdleMode(const MuxIdleModes mode);
-
-
 };
