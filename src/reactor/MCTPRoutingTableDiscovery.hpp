@@ -33,9 +33,15 @@ class MCTPRoutingTableDiscovery : public MCTPDiscovery
     }
 
     /// Re-trigger discovery and refresh routing table when host comes up.
-    void onHostOn() override { notifyHostOn(); }
+    void onHostOn() override
+    {
+        notifyHostOn();
+    }
     /// Drop all known endpoints when host goes away.
-    void onHostOff() override { removeAllEndpoint(); }
+    void onHostOff() override
+    {
+        removeAllEndpoint();
+    }
 
     void notifyHostOn();
 

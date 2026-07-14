@@ -2,7 +2,8 @@
 
 #include <string_view>
 
-namespace mctp::dbus {
+namespace mctp::dbus
+{
 
 // CodeConstruct MCTP D-Bus service
 constexpr std::string_view service = "au.com.codeconstruct.MCTP1";
@@ -29,8 +30,7 @@ constexpr std::string_view inventoryBasePath =
     "/xyz/openbmc_project/inventory/";
 
 // Reactor D-Bus name
-constexpr std::string_view reactorService =
-    "xyz.openbmc_project.MCTPReactor";
+constexpr std::string_view reactorService = "xyz.openbmc_project.MCTPReactor";
 
 // OpenBMC decorator interfaces
 constexpr std::string_view i2cDecoratorInterface =

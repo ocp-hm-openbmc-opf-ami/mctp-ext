@@ -38,19 +38,19 @@ struct I2CDiscoveryConfig
  */
 struct I3CDeviceConfig
 {
-    std::string name;               // Device name
-    std::uint8_t busNum = 0;        // I3C bus number
-    std::uint32_t pidMask = 0;      // PID mask to match
-    std::string devicePid;          // Device PID hex string
-    std::string role;               // Device role (e.g., "bus-owner")
-    bool isTarget = true;            // Is I3C target device
+    std::string name;                 // Device name
+    std::uint8_t busNum = 0;          // I3C bus number
+    std::uint32_t pidMask = 0;        // PID mask to match
+    std::string devicePid;            // Device PID hex string
+    std::string role;                 // Device role (e.g., "bus-owner")
+    bool isTarget = true;             // Is I3C target device
     bool isSecondaryBusOwner = false; // Is secondary bus owner
-    std::string staticEndpointId;    // Static EID to assign
+    std::string staticEndpointId;     // Static EID to assign
 };
 
 struct I3CDiscoveryConfig
 {
-    bool enabled = MCTP_I3C_ENABLED;    
+    bool enabled = MCTP_I3C_ENABLED;
     std::uint16_t i3cNet = DEFAULT_I3C_NET;
     std::uint8_t busOwnerEid = DEFAULT_I3C_BUSOWNER_EID;
     std::uint8_t endpointEid = DEFAULT_I3C_ENDPOINT_EID;
@@ -62,14 +62,15 @@ struct I3CDiscoveryConfig
 
 struct PCIeDiscoveryConfig
 {
-    bool enabled = MCTP_PCIE_ENABLED;       
+    bool enabled = MCTP_PCIE_ENABLED;
     std::uint16_t pcieNet = DEFAULT_PCIE_NET;
     std::uint8_t localEid = DEFAULT_LOCAL_EID;
     std::string pcieRole = MCTP_PCIE_ROLE;
     std::chrono::seconds pollingInterval{DEFAULT_PCIE_POLL_INTERVAL};
 };
 
-struct USBTargetConfig {
+struct USBTargetConfig
+{
     std::string name;
     std::string interface;
     std::string usbPath;
@@ -81,12 +82,16 @@ struct USBTargetConfig {
     std::string ignoreEids;
 };
 
-struct USBDiscoveryConfig {
-    bool enabled = MCTP_USB_ENABLED;       
+struct USBDiscoveryConfig
+{
+    bool enabled = MCTP_USB_ENABLED;
     bool hotplugEnabled = MCTP_USB_HOTPLUG_ENABLED;
-    std::uint16_t usbNet = DEFAULT_USB_NET;                       // Network number for USB MCTP devices
-    std::uint8_t localEid = DEFAULT_LOCAL_EID;                    // Default local EID for USB interfaces
-    std::chrono::seconds pollingInterval{DEFAULT_USB_POLL_INTERVAL}; // Discovery poll interval
+    std::uint16_t usbNet =
+        DEFAULT_USB_NET;            // Network number for USB MCTP devices
+    std::uint8_t localEid =
+        DEFAULT_LOCAL_EID;          // Default local EID for USB interfaces
+    std::chrono::seconds pollingInterval{
+        DEFAULT_USB_POLL_INTERVAL}; // Discovery poll interval
     std::vector<USBTargetConfig> targets;
 };
 

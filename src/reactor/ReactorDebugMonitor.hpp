@@ -31,11 +31,13 @@ class ReactorDebugMonitor
     ReactorDebugMonitor(boost::asio::io_context& ioCtx,
                         const std::string& directory = "/var/run",
                         const std::string& file = "mctp_trace_on") :
-        io(ioCtx),
-        directoryPath(directory), fileName(file)
+        io(ioCtx), directoryPath(directory), fileName(file)
     {}
 
-    ~ReactorDebugMonitor() { stop(); }
+    ~ReactorDebugMonitor()
+    {
+        stop();
+    }
 
     ReactorDebugMonitor(const ReactorDebugMonitor&) = delete;
     ReactorDebugMonitor& operator=(const ReactorDebugMonitor&) = delete;
@@ -56,17 +58,15 @@ class ReactorDebugMonitor
 
         if (watchDescriptor < 0)
         {
-            lg2::error(
-                "ReactorDebugMonitor: inotify_add_watch failed: {ERROR}",
-                "ERROR", strerror(errno));
+            lg2::error("ReactorDebugMonitor: inotify_add_watch failed: {ERROR}",
+                       "ERROR", strerror(errno));
             close(inotifyFd);
             inotifyFd = -1;
             return -1;
         }
 
-        descriptor =
-            std::make_unique<boost::asio::posix::stream_descriptor>(
-                io, inotifyFd);
+        descriptor = std::make_unique<boost::asio::posix::stream_descriptor>(
+            io, inotifyFd);
 
         // Check if file already exists at startup
         std::string filePath = directoryPath + "/" + fileName;
@@ -79,8 +79,8 @@ class ReactorDebugMonitor
 
         asyncWaitForEvents();
 
-        lg2::info("ReactorDebugMonitor started, watching {DIR}/{FILE}",
-                  "DIR", directoryPath, "FILE", fileName);
+        lg2::info("ReactorDebugMonitor started, watching {DIR}/{FILE}", "DIR",
+                  directoryPath, "FILE", fileName);
         return 0;
     }
 
@@ -114,11 +114,10 @@ class ReactorDebugMonitor
             return;
         }
 
-        descriptor->async_wait(
-            boost::asio::posix::stream_descriptor::wait_read,
-            [this](const boost::system::error_code& ec) {
-                handleInotifyEvent(ec);
-            });
+        descriptor->async_wait(boost::asio::posix::stream_descriptor::wait_read,
+                               [this](const boost::system::error_code& ec) {
+                                   handleInotifyEvent(ec);
+                               });
     }
 
     void handleInotifyEvent(const boost::system::error_code& ec)
@@ -183,8 +182,8 @@ class ReactorDebugMonitor
         std::ifstream file(filePath);
         if (!file)
         {
-            lg2::warning("ReactorDebugMonitor: cannot open {PATH}",
-                         "PATH", filePath);
+            lg2::warning("ReactorDebugMonitor: cannot open {PATH}", "PATH",
+                         filePath);
             return;
         }
 
@@ -233,17 +232,15 @@ class ReactorDebugMonitor
             try
             {
                 int level = std::stoi(levelStr);
-                lg2::info(
-                    "ReactorDebugMonitor: setting log level to {LEVEL}",
-                    "LEVEL", level);
+                lg2::info("ReactorDebugMonitor: setting log level to {LEVEL}",
+                          "LEVEL", level);
                 applyLogLevel(level);
                 return;
             }
             catch (...)
             {
-                lg2::warning(
-                    "ReactorDebugMonitor: invalid level '{LEVEL_STR}'",
-                    "LEVEL_STR", levelStr);
+                lg2::warning("ReactorDebugMonitor: invalid level '{LEVEL_STR}'",
+                             "LEVEL_STR", levelStr);
             }
         }
 

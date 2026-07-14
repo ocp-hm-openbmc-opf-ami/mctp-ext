@@ -9,9 +9,9 @@
 
 #include <chrono>
 #include <cstring>
-#include <fstream>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <sstream>
 
 PHOSPHOR_LOG2_USING;
@@ -21,12 +21,10 @@ static constexpr uint8_t LIBUSB_CLASS_MCTP = 0x14;
 
 MCTPUSBDiscovery::MCTPUSBDiscovery(
     const std::shared_ptr<sdbusplus::asio::connection>& bus,
-    const USBDiscoveryConfig& config) :
-    MCTPDiscovery(bus),
-    config(config)
+    const USBDiscoveryConfig& config) : MCTPDiscovery(bus), config(config)
 {
-    debug("MCTPUSBDiscovery initialized: pollingInterval={POLL}",
-          "POLL", config.pollingInterval.count());
+    debug("MCTPUSBDiscovery initialized: pollingInterval={POLL}", "POLL",
+          config.pollingInterval.count());
 
     // Initialize libusb hotplug support
     if (config.hotplugEnabled)
@@ -65,8 +63,8 @@ namespace fs = std::filesystem;
 MCTPUSBDiscovery::SetupEndpointResponse MCTPUSBDiscovery::setupEndpoint(
     const std::string& interfaceName)
 {
-    std::string objPath = std::format("{}{}",
-        std::string(mctp::dbus::interfacesPath), interfaceName);
+    std::string objPath = std::format(
+        "{}{}", std::string(mctp::dbus::interfacesPath), interfaceName);
 
     debug("Calling SetupEndpoint on {PATH}", "PATH", objPath);
 
@@ -90,8 +88,8 @@ MCTPUSBDiscovery::SetupEndpointResponse MCTPUSBDiscovery::setupEndpoint(
 
 void MCTPUSBDiscovery::enumerateTargets()
 {
-    debug("Enumerating {COUNT} configured USB targets",
-          "COUNT", config.targets.size());
+    debug("Enumerating {COUNT} configured USB targets", "COUNT",
+          config.targets.size());
 
     // Query available interfaces once before the loop
     auto links = getLinksViaNetlink("mctpusb");
@@ -112,28 +110,29 @@ void MCTPUSBDiscovery::enumerateTargets()
         // Check if target interface exists
         if (!availableLinks.contains(target.interface))
         {
-            warning("USB target {NAME}: interface {INTF} does not exist, skipping",
-                    "NAME", target.name, "INTF", target.interface);
+            warning(
+                "USB target {NAME}: interface {INTF} does not exist, skipping",
+                "NAME", target.name, "INTF", target.interface);
             continue;
         }
 
         // Ensure interface is up and local EID is configured
         {
             uint8_t eid = target.ownEid.empty()
-                ? config.localEid
-                : static_cast<uint8_t>(
-                      std::stoul(target.ownEid, nullptr, 0));
+                              ? config.localEid
+                              : static_cast<uint8_t>(
+                                    std::stoul(target.ownEid, nullptr, 0));
             if (!ensureInterfaceReady(target.interface, eid, config.usbNet))
             {
-                warning("USB target {NAME}: interface {INTF} not ready, skipping",
-                        "NAME", target.name, "INTF", target.interface);
+                warning(
+                    "USB target {NAME}: interface {INTF} not ready, skipping",
+                    "NAME", target.name, "INTF", target.interface);
                 continue;
             }
         }
 
         try
         {
-            
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
             manageDeviceViaReactor(target.interface, target.interface);
 #else
@@ -141,10 +140,9 @@ void MCTPUSBDiscovery::enumerateTargets()
 
             if (response.eid > 0)
             {
-                debug("Target {NAME} assigned EID={EID}, net={NET}",
-                      "NAME", target.name,
-                      "EID", static_cast<int>(response.eid),
-                      "NET", response.networkId);
+                debug("Target {NAME} assigned EID={EID}, net={NET}", "NAME",
+                      target.name, "EID", static_cast<int>(response.eid), "NET",
+                      response.networkId);
 
                 deviceEids[target.interface] = response.eid;
                 assignedEndpoints.insert(target.interface);
@@ -158,8 +156,8 @@ void MCTPUSBDiscovery::enumerateTargets()
         }
         catch (const std::exception& e)
         {
-            warning("Error setting up target {NAME}: {ERROR}",
-                    "NAME", target.name, "ERROR", e.what());
+            warning("Error setting up target {NAME}: {ERROR}", "NAME",
+                    target.name, "ERROR", e.what());
         }
     }
 }
@@ -195,8 +193,9 @@ void MCTPUSBDiscovery::enumerateMCTPNetlinkInterfaces()
 
             if (response.eid > 0)
             {
-                debug("SetupEndpoint successful for interface {NAME}, EID={EID}",
-                      "NAME", ifname, "EID", static_cast<int>(response.eid));
+                debug(
+                    "SetupEndpoint successful for interface {NAME}, EID={EID}",
+                    "NAME", ifname, "EID", static_cast<int>(response.eid));
 
                 // Store EID for later use when device departs
                 deviceEids[ifname] = response.eid;
@@ -236,13 +235,12 @@ int MCTPUSBDiscovery::initializeHotplug()
     }
 
     auto events = static_cast<libusb_hotplug_event>(
-        LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED |
-        LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT);
+        LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT);
 
     rc = libusb_hotplug_register_callback(
-        usbContext, events, LIBUSB_HOTPLUG_ENUMERATE,
-        LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY,
-        LIBUSB_HOTPLUG_MATCH_ANY, hotplugCallback, this, &hotplugHandle);
+        usbContext, events, LIBUSB_HOTPLUG_ENUMERATE, LIBUSB_HOTPLUG_MATCH_ANY,
+        LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY, hotplugCallback,
+        this, &hotplugHandle);
 
     if (rc != LIBUSB_SUCCESS)
     {
@@ -319,8 +317,7 @@ bool MCTPUSBDiscovery::isMCTPUSBInterface(libusb_device* device)
 
     if (ret != LIBUSB_SUCCESS)
     {
-        debug("Failed to get config: {ERROR}", "ERROR",
-              libusb_error_name(ret));
+        debug("Failed to get config: {ERROR}", "ERROR", libusb_error_name(ret));
         return false;
     }
 
@@ -375,8 +372,9 @@ int MCTPUSBDiscovery::handleDeviceArrived(libusb_device* device)
     }
     else
     {
-        warning("Could not find MCTP netlink interface in sysfs for port path: {PORT}",
-                "PORT", busPortPath);
+        warning(
+            "Could not find MCTP netlink interface in sysfs for port path: {PORT}",
+            "PORT", busPortPath);
         return LIBUSB_SUCCESS;
     }
 
@@ -399,13 +397,14 @@ int MCTPUSBDiscovery::handleDeviceArrived(libusb_device* device)
 
     // Ensure interface is up and local EID is configured
     {
-        uint8_t eid = ownEid.empty()
-            ? config.localEid
-            : static_cast<uint8_t>(std::stoul(ownEid, nullptr, 0));
+        uint8_t eid =
+            ownEid.empty()
+                ? config.localEid
+                : static_cast<uint8_t>(std::stoul(ownEid, nullptr, 0));
         if (!ensureInterfaceReady(netlinkName, eid, config.usbNet))
         {
-            warning("Hotplug: interface {INTF} not ready, skipping",
-                    "INTF", netlinkName);
+            warning("Hotplug: interface {INTF} not ready, skipping", "INTF",
+                    netlinkName);
             return LIBUSB_SUCCESS;
         }
     }
@@ -440,9 +439,10 @@ int MCTPUSBDiscovery::handleDeviceArrived(libusb_device* device)
 #else
             auto response = setupEndpoint(assignIdentifier);
 
-            debug("SetupEndpoint successful for EID={EID}, net={NET}, device={PATH}",
-                  "EID", static_cast<int>(response.eid), "NET", response.networkId,
-                  "PATH", busPortPath);
+            debug(
+                "SetupEndpoint successful for EID={EID}, net={NET}, device={PATH}",
+                "EID", static_cast<int>(response.eid), "NET",
+                response.networkId, "PATH", busPortPath);
 
             // Store EID for later use when device departs
             deviceEids[busPortPath] = response.eid;
@@ -496,16 +496,17 @@ int MCTPUSBDiscovery::handleDeviceDeparted(libusb_device* device)
         if (eidIt != deviceEids.end())
         {
             uint8_t eid = eidIt->second;
-            
+
             // Call removeEndpoint to handle D-Bus removal
             removeEndpoint(config.usbNet, eid);
-            
+
             // Clean up stored EID
             deviceEids.erase(eidIt);
         }
         else
         {
-            warning("No stored EID found for departing device: {PATH}", "PATH", busPortPath);
+            warning("No stored EID found for departing device: {PATH}", "PATH",
+                    busPortPath);
         }
     }
     catch (const std::exception& e)
@@ -516,8 +517,9 @@ int MCTPUSBDiscovery::handleDeviceDeparted(libusb_device* device)
     return LIBUSB_SUCCESS;
 }
 
-int MCTPUSBDiscovery::hotplugCallback(libusb_context* ctx, libusb_device* device,
-                                     libusb_hotplug_event event, void* userData)
+int MCTPUSBDiscovery::hotplugCallback(
+    libusb_context* ctx, libusb_device* device, libusb_hotplug_event event,
+    void* userData)
 {
     (void)ctx;
 
@@ -579,8 +581,7 @@ std::string MCTPUSBDiscovery::constructBusPortPath(libusb_device* device)
     }
 
     // Construct final string as "bus_id-port1-port2-port3"
-    std::string result =
-        std::to_string(busId) + "-" + portPath;
+    std::string result = std::to_string(busId) + "-" + portPath;
 
     debug("Constructed bus-port path: {PATH}", "PATH", result);
     return result;
@@ -635,8 +636,7 @@ std::string MCTPUSBDiscovery::searchMCTPNetlinkByPortPath(
                 continue;
             }
 
-            debug("Found net directory for device: {NAME}", "NAME",
-                  deviceName);
+            debug("Found net directory for device: {NAME}", "NAME", deviceName);
 
             // Search for MCTP interface in net directory
             for (const auto& netEntry : fs::directory_iterator(netPath))
@@ -646,14 +646,16 @@ std::string MCTPUSBDiscovery::searchMCTPNetlinkByPortPath(
                 // Look for MCTP interface (typically starts with "mctpusb")
                 if (netName.starts_with("mctpusb"))
                 {
-                    debug("Found MCTP netlink interface: {NAME} for port path {PORT}",
-                          "NAME", netName, "PORT", busPortPath);
+                    debug(
+                        "Found MCTP netlink interface: {NAME} for port path {PORT}",
+                        "NAME", netName, "PORT", busPortPath);
                     return netName;
                 }
             }
 
-            warning("No MCTP netlink interface found in net directory for device: {NAME}",
-                    "NAME", deviceName);
+            warning(
+                "No MCTP netlink interface found in net directory for device: {NAME}",
+                "NAME", deviceName);
         }
 
         warning("No matching USB device found for port path: {PATH}", "PATH",
@@ -669,8 +671,8 @@ std::string MCTPUSBDiscovery::searchMCTPNetlinkByPortPath(
 }
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-void MCTPUSBDiscovery::manageDeviceViaReactor(
-    const std::string& interfaceName, const std::string& trackingKey)
+void MCTPUSBDiscovery::manageDeviceViaReactor(const std::string& interfaceName,
+                                              const std::string& trackingKey)
 {
     if (!reactor)
     {
@@ -688,7 +690,7 @@ void MCTPUSBDiscovery::manageDeviceViaReactor(
     try
     {
         auto device = std::make_shared<MCTPDDevice>(bus, interfaceName,
-                                                     std::vector<uint8_t>{});
+                                                    std::vector<uint8_t>{});
         std::string path = std::format(
             "/xyz/openbmc_project/mctp/discovery/usb/{}", interfaceName);
         debug("Managing USB device via reactor: intf={INTF}, path={PATH}",

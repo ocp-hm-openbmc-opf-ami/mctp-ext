@@ -19,12 +19,25 @@ class PeriodicTask
     template <typename Duration>
     PeriodicTask(boost::asio::io_context& io, Duration interval,
                  std::function<void()> task) :
-        timer(io), interval(std::chrono::duration_cast<std::chrono::nanoseconds>(interval)), task(std::move(task))
+        timer(io),
+        interval(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(interval)),
+        task(std::move(task))
     {
         schedule();
     }
 
-    ~PeriodicTask() { timer.cancel(); }
+    ~PeriodicTask()
+    {
+        try
+        {
+            timer.cancel();
+        }
+        catch (...)
+        {
+            // Destructor must not throw
+        }
+    }
     PeriodicTask(const PeriodicTask&) = delete;
     PeriodicTask(PeriodicTask&&) = delete;
     PeriodicTask& operator=(const PeriodicTask&) = delete;

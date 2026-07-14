@@ -16,7 +16,7 @@
 
 #include "Utils.hpp"
 
-//#include "dbus-sensor_config.h"
+// #include "dbus-sensor_config.h"
 
 #include "DeviceMgmt.hpp"
 #include "VariantVisitors.hpp"

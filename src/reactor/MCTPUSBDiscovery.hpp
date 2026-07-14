@@ -6,10 +6,11 @@
 #include "MCTPDiscovery.hpp"
 #include "MCTPReactorConfig.hpp"
 
+#include <libusb-1.0/libusb.h>
+
 #include <sdbusplus/asio/connection.hpp>
 
 #include <cstdint>
-#include <libusb-1.0/libusb.h>
 #include <map>
 #include <memory>
 #include <set>
@@ -30,19 +31,27 @@ class MCTPReactor;
 class MCTPUSBDiscovery : public MCTPDiscovery
 {
   public:
-    MCTPUSBDiscovery(
-        const std::shared_ptr<sdbusplus::asio::connection>& bus,
-        const USBDiscoveryConfig& config);
+    MCTPUSBDiscovery(const std::shared_ptr<sdbusplus::asio::connection>& bus,
+                     const USBDiscoveryConfig& config);
     ~MCTPUSBDiscovery() override;
 
     void run() override;
-    std::string_view name() const override { return "USB"; }
+    std::string_view name() const override
+    {
+        return "USB";
+    }
 
     /// Reset USB enumeration state on host power-on.
-    void onHostOn() override { resetDiscoveryState(); }
+    void onHostOn() override
+    {
+        resetDiscoveryState();
+    }
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-    void setReactor(const std::shared_ptr<MCTPReactor>& r) { reactor = r; }
+    void setReactor(const std::shared_ptr<MCTPReactor>& r)
+    {
+        reactor = r;
+    }
 #endif
 
     /**
@@ -156,13 +165,14 @@ class MCTPUSBDiscovery : public MCTPDiscovery
      * @brief Static hotplug callback dispatcher
      */
     static int hotplugCallback(libusb_context* ctx, libusb_device* device,
-                              libusb_hotplug_event event, void* userData);
+                               libusb_hotplug_event event, void* userData);
 
     // Hotplug state
     libusb_context* usbContext = nullptr;
     libusb_hotplug_callback_handle hotplugHandle = 0;
     bool hotplugInitialized = false;
     std::map<std::string, libusb_device_handle*> deviceHandles;
-    std::map<std::string, uint8_t> deviceEids;  // Map busPortPath -> EID
-    std::set<std::string> assignedEndpoints;    // Track successfully assigned endpoints
+    std::map<std::string, uint8_t> deviceEids; // Map busPortPath -> EID
+    std::set<std::string>
+        assignedEndpoints; // Track successfully assigned endpoints
 };

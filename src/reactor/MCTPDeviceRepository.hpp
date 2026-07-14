@@ -63,8 +63,7 @@ class MCTPDeviceRepository
         devices.erase(entry);
     }
 
-    [[nodiscard]] bool contains(
-        const std::shared_ptr<MCTPDevice>& device) const
+    [[nodiscard]] bool contains(const std::shared_ptr<MCTPDevice>& device) const
     {
         return lookup(device) != devices.end();
     }

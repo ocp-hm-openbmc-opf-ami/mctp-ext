@@ -3,14 +3,14 @@
 #include "DBusAssociationServer.hpp"
 #include "HostStateMonitor.hpp"
 #include "MCTPConstants.hpp"
+#include "MCTPEndpoint.hpp"
 #include "MCTPI2CDiscovery.hpp"
 #include "MCTPI3CDiscovery.hpp"
-#include "MCTPUSBDiscovery.hpp"
-#include "MCTPEndpoint.hpp"
 #include "MCTPPCIeDiscovery.hpp"
 #include "MCTPReactor.hpp"
 #include "MCTPReactorConfig.hpp"
 #include "MCTPRoutingTableDiscovery.hpp"
+#include "MCTPUSBDiscovery.hpp"
 #include "PeriodicTask.hpp"
 #include "ReactorDebugMonitor.hpp"
 #include "Utils.hpp"
@@ -117,7 +117,7 @@ static void removeInventory(const std::shared_ptr<MCTPReactor>& reactor,
     }
 }
 
-static void manageMCTPEntity(
+[[maybe_unused]] static void manageMCTPEntity(
     const std::shared_ptr<sdbusplus::asio::connection>& connection,
     const std::shared_ptr<MCTPReactor>& reactor, ManagedObjectType& entities)
 {
@@ -152,6 +152,7 @@ static void exitReactor(boost::asio::io_context* io, sdbusplus::message_t& msg)
 }
 
 int main(int /*argc*/, char* /*argv*/[])
+try
 {
     boost::asio::io_context io;
     auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
@@ -208,12 +209,13 @@ int main(int /*argc*/, char* /*argv*/[])
         std::make_shared<MCTPRoutingTableDiscovery>(systemBus);
 
     // Periodic tasks
-    PeriodicTask reactorTick(io, config.reactorTickPeriod,
-                             [reactor]() { reactor->tick(); });
-    
+    PeriodicTask reactorTick(io, config.reactorTickPeriod, [reactor]() {
+        reactor->tick();
+    });
+
     // Create discovery tasks only if enabled in config
     std::vector<PeriodicTask*> discoveryTasks;
-    
+
     std::optional<PeriodicTask> i2cHotplugTask;
     if (config.i2c.enabled)
     {
@@ -237,19 +239,22 @@ int main(int /*argc*/, char* /*argv*/[])
                         [usbDiscovery]() { usbDiscovery->run(); });
         discoveryTasks.push_back(&usbTask.value());
     }
-    
-    // USB hotplug event handling - run frequently to process device hotplug events
+
+    // USB hotplug event handling - run frequently to process device hotplug
+    // events
     std::optional<PeriodicTask> usbHotplugTask;
     if (config.usb.enabled && config.usb.hotplugEnabled)
     {
-        usbHotplugTask.emplace(io, std::chrono::milliseconds(100),
-                               [usbDiscovery]() { usbDiscovery->handleLibusbEvents(); });
+        usbHotplugTask.emplace(
+            io, std::chrono::milliseconds(100),
+            [usbDiscovery]() { usbDiscovery->handleLibusbEvents(); });
     }
-    
+
     std::optional<PeriodicTask> routingTableTask;
     // Routing table discovery is always created (no enabled flag)
-    routingTableTask.emplace(io, config.routingTable.pollingInterval,
-                             [routingTableDiscovery]() { routingTableDiscovery->run(); });
+    routingTableTask.emplace(
+        io, config.routingTable.pollingInterval,
+        [routingTableDiscovery]() { routingTableDiscovery->run(); });
     discoveryTasks.push_back(&routingTableTask.value());
 
     // Each discovery module auto-registered itself with MCTPDiscovery on
@@ -257,22 +262,17 @@ int main(int /*argc*/, char* /*argv*/[])
     // through the static dispatchers; subclasses handle the events via
     // their onHostOn/onHostOff/onPlatformReset overrides.
     HostStateMonitor hostMonitor(
-        systemBus,
-        discoveryTasks,
-        []() { MCTPDiscovery::dispatchHostOff(); },
+        systemBus, discoveryTasks, []() { MCTPDiscovery::dispatchHostOff(); },
         []() { MCTPDiscovery::dispatchHostOn(); },
         []() {
             info("Handling platform reset: dispatching to discovery modules");
             MCTPDiscovery::dispatchPlatformReset();
-        }
-    );
+        });
 
     // Setup signal handler for graceful shutdown on SIGTERM
     boost::asio::signal_set signals(io, SIGTERM, SIGINT);
-    signals.async_wait([&io, &config
-                        , &usbDiscovery
-                       ](const boost::system::error_code& ec,
-                                             int signum) {
+    signals.async_wait([&io, &config, &usbDiscovery](
+                           const boost::system::error_code& ec, int signum) {
         if (!ec)
         {
             info("Received signal {SIGNAL}, shutting down gracefully", "SIGNAL",
@@ -283,7 +283,7 @@ int main(int /*argc*/, char* /*argv*/[])
                 info("Closing USB device handles");
                 usbDiscovery->shutdownHotplug();
             }
-            
+
             // Stop the io_context to exit the event loop
             io.stop();
         }
@@ -328,14 +328,15 @@ int main(int /*argc*/, char* /*argv*/[])
         static_cast<sdbusplus::bus_t&>(*systemBus), interfacesAddedMatchSpec,
         std::bind_front(addInventory, systemBus, reactor));
 
-    //systemBus->request_name(mctp::dbus::reactorService.data());
+    // systemBus->request_name(mctp::dbus::reactorService.data());
 
-    //boost::asio::post(io, [reactor, systemBus]() {
-    //    auto gsc = std::make_shared<GetSensorConfiguration>(
-    //        systemBus, std::bind_front(manageMCTPEntity, systemBus, reactor));
-    //    std::vector<std::string_view> types{"MCTPI2CTarget", "MCTPI3CTarget"};
-    //    gsc->getConfiguration(types);
-    //});
+    // boost::asio::post(io, [reactor, systemBus]() {
+    //     auto gsc = std::make_shared<GetSensorConfiguration>(
+    //         systemBus, std::bind_front(manageMCTPEntity, systemBus,
+    //         reactor));
+    //     std::vector<std::string_view> types{"MCTPI2CTarget",
+    //     "MCTPI3CTarget"}; gsc->getConfiguration(types);
+    // });
 
     // Monitor /var/run/mctp_trace_on for runtime log level changes
     ReactorDebugMonitor debugMonitor(io);
@@ -344,4 +345,15 @@ int main(int /*argc*/, char* /*argv*/[])
     io.run();
 
     return EXIT_SUCCESS;
+}
+catch (const std::exception& e)
+{
+    error("mctpreactor terminated with unhandled exception: {WHAT}", "WHAT",
+          e.what());
+    return EXIT_FAILURE;
+}
+catch (...)
+{
+    error("mctpreactor terminated with unknown unhandled exception");
+    return EXIT_FAILURE;
 }

@@ -85,8 +85,49 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     std::set<std::string> whitelist = {"12", "13", "1d", "32"};
 
     static constexpr std::uint8_t minBusNum = 16;
+    static constexpr std::uint32_t i2cDefaultMtu = 254;
 
-    // ARP configuration
+    /**
+     * @brief Busy-file path used to serialise long-running I2C discovery.
+     *
+     * PROTOCOL — any module that drives the I2C bus for an extended period
+     * (firmware update, raw scan, test tool, etc.) MUST follow this contract
+     * to prevent concurrent access races with MCTPI2CDiscovery::run().
+     *
+     * ACQUIRING the lock (before starting the long task):
+     * -------------------------------------------------------
+     *   int fd = open(busyFilePath.data(),
+     *                 O_CREAT | O_EXCL | O_WRONLY, 0644);
+     *   if (fd < 0) {
+     *       if (errno == EEXIST)
+     *           // Another task owns the bus — abort or retry later.
+     *       else
+     *           // Unexpected error — log and abort.
+     *       return;
+     *   }
+     *   close(fd);   // File creation is the lock; fd is not kept open.
+     *
+     * Rules:
+     *   1. Use O_CREAT | O_EXCL together — this is an atomic
+     *      create-only-if-absent operation; never use exists() + create()
+     *      as separate steps (TOCTOU race).
+     *   2. Do NOT hold the fd open. The presence of the file is the mutex;
+     *      the fd can be closed immediately after creation.
+     *   3. Always remove the file when the task finishes — both on the
+     *      success and every error path:
+     *          std::filesystem::remove(busyFilePath);
+     *      Use RAII or a try/catch to guarantee cleanup on exceptions.
+     *   4. The lock is advisory: all cooperating callers must check it.
+     *      It does NOT prevent kernel-level I2C access.
+     *   5. Never nest locks.  If your code already owns the file, do not
+     *      attempt to re-create it.
+     *
+     * RELEASING the lock (after the long task completes or fails):
+     * -------------------------------------------------------
+     *   std::filesystem::remove(busyFilePath);  // idempotent on missing file
+     */
+    static constexpr std::string_view busyFilePath =
+        "/var/run/mctp_i2c_bus_busy";
     std::set<std::uint8_t>
         processedBuses;  // Buses that have had Prepare ARP sent
     std::uint8_t nextArpAddress =

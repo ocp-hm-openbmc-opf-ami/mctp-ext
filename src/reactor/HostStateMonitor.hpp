@@ -51,7 +51,10 @@ class HostStateMonitor
     HostStateMonitor& operator=(const HostStateMonitor&) = delete;
     HostStateMonitor& operator=(HostStateMonitor&&) = delete;
 
-    bool isHostOn() const { return hostOn; }
+    bool isHostOn() const
+    {
+        return hostOn;
+    }
 
   private:
     void queryInitialState();

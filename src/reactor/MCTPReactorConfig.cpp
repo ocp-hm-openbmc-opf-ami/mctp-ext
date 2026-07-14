@@ -4,6 +4,7 @@
 #include "VariantVisitors.hpp"
 
 #include <json-c/json.h>
+
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/message.hpp>
 
@@ -24,7 +25,8 @@ PHOSPHOR_LOG2_USING;
  * @brief Load configuration from mctpd.conf TOML file
  * @param configPath Path to mctpd.conf file
  * @param config Config object to populate
- * @return true if file was parsed successfully, false if file not found or error
+ * @return true if file was parsed successfully, false if file not found or
+ * error
  */
 static bool loadFromTomlFile(const std::string& configPath,
                              MCTPReactorConfig& config)
@@ -46,12 +48,13 @@ static bool loadFromTomlFile(const std::string& configPath,
     char errbuf[200];
     // Create mutable copy for parsing
     std::string mutableContent = fileContent;
-    toml_table_t* conf = toml_parse(const_cast<char*>(mutableContent.c_str()), errbuf, sizeof(errbuf));
+    toml_table_t* conf = toml_parse(const_cast<char*>(mutableContent.c_str()),
+                                    errbuf, sizeof(errbuf));
 
     if (!conf)
     {
-        warning("Failed to parse TOML file {PATH}: {ERROR}", "PATH",
-                configPath, "ERROR", errbuf);
+        warning("Failed to parse TOML file {PATH}: {ERROR}", "PATH", configPath,
+                "ERROR", errbuf);
         return false;
     }
 
@@ -78,7 +81,8 @@ static bool loadFromTomlFile(const std::string& configPath,
         }
 
         // Read whitelist (space-separated string)
-        toml_datum_t whitelist = toml_string_in(i2c_table, "mctp_i2c_whitelist");
+        toml_datum_t whitelist =
+            toml_string_in(i2c_table, "mctp_i2c_whitelist");
         if (whitelist.ok)
         {
             config.i2c.whitelist.clear();
@@ -91,10 +95,12 @@ static bool loadFromTomlFile(const std::string& configPath,
         }
 
         // Read poll_interval_secs
-        toml_datum_t poll_interval = toml_int_in(i2c_table, "mctp_i2c_poll_interval_secs");
+        toml_datum_t poll_interval =
+            toml_int_in(i2c_table, "mctp_i2c_poll_interval_secs");
         if (poll_interval.ok)
         {
-            config.i2c.pollingInterval = std::chrono::seconds(poll_interval.u.i);
+            config.i2c.pollingInterval =
+                std::chrono::seconds(poll_interval.u.i);
         }
     }
 
@@ -118,10 +124,12 @@ static bool loadFromTomlFile(const std::string& configPath,
         }
 
         // Read poll_interval_secs
-        toml_datum_t poll_interval = toml_int_in(i3c_table, "mctp_i3c_poll_interval_secs");
+        toml_datum_t poll_interval =
+            toml_int_in(i3c_table, "mctp_i3c_poll_interval_secs");
         if (poll_interval.ok)
         {
-            config.i3c.pollingInterval = std::chrono::seconds(poll_interval.u.i);
+            config.i3c.pollingInterval =
+                std::chrono::seconds(poll_interval.u.i);
         }
 
         // Read I3C devices array
@@ -159,7 +167,8 @@ static bool loadFromTomlFile(const std::string& configPath,
                 }
 
                 // Read device_pid
-                toml_datum_t device_pid = toml_string_in(device_table, "device_pid");
+                toml_datum_t device_pid =
+                    toml_string_in(device_table, "device_pid");
                 if (device_pid.ok)
                 {
                     device.devicePid = device_pid.u.s;
@@ -173,7 +182,8 @@ static bool loadFromTomlFile(const std::string& configPath,
                 }
 
                 // Read is_i3c_target
-                toml_datum_t is_tgt = toml_bool_in(device_table, "is_i3c_target");
+                toml_datum_t is_tgt =
+                    toml_bool_in(device_table, "is_i3c_target");
                 if (is_tgt.ok)
                 {
                     device.isTarget = is_tgt.u.b;
@@ -185,7 +195,8 @@ static bool loadFromTomlFile(const std::string& configPath,
                 }
 
                 // Read is_secondary_bus_owner
-                toml_datum_t is_secondary = toml_bool_in(device_table, "is_secondary_bus_owner");
+                toml_datum_t is_secondary =
+                    toml_bool_in(device_table, "is_secondary_bus_owner");
                 if (is_secondary.ok)
                 {
                     device.isSecondaryBusOwner = is_secondary.u.b;
@@ -217,10 +228,12 @@ static bool loadFromTomlFile(const std::string& configPath,
         }
 
         // Read poll_interval_secs
-        toml_datum_t poll_interval = toml_int_in(pcie_table, "mctp_pcie_poll_interval_secs");
+        toml_datum_t poll_interval =
+            toml_int_in(pcie_table, "mctp_pcie_poll_interval_secs");
         if (poll_interval.ok)
         {
-            config.pcie.pollingInterval = std::chrono::seconds(poll_interval.u.i);
+            config.pcie.pollingInterval =
+                std::chrono::seconds(poll_interval.u.i);
         }
     }
 
@@ -234,25 +247,23 @@ static bool loadFromTomlFile(const std::string& configPath,
             config.usb.usbNet = static_cast<std::uint16_t>(usb_net.u.i);
         }
 
-        toml_datum_t poll_interval = toml_int_in(usb_table, "mctp_usb_poll_interval_secs");
+        toml_datum_t poll_interval =
+            toml_int_in(usb_table, "mctp_usb_poll_interval_secs");
         if (poll_interval.ok)
         {
-            config.usb.pollingInterval = std::chrono::seconds(poll_interval.u.i);
+            config.usb.pollingInterval =
+                std::chrono::seconds(poll_interval.u.i);
         }
     }
 
     toml_free(conf);
 
     info("MCTPReactorConfig loaded from TOML file {PATH}:", "PATH", configPath);
-    info("  I2C: net={NET}",
-         "NET", config.i2c.i2cNet);
-    info("  I3C: platform={PLAT}, devices={DEV_COUNT}",
-         "PLAT", config.i3c.platformSoc,
-         "DEV_COUNT", config.i3c.devices.size());
-    info("  PCIe: net={NET}",
-         "NET", config.pcie.pcieNet);
-    info("  USB: net={NET}, targets={TGT_COUNT}",
-         "NET", config.usb.usbNet,
+    info("  I2C: net={NET}", "NET", config.i2c.i2cNet);
+    info("  I3C: platform={PLAT}, devices={DEV_COUNT}", "PLAT",
+         config.i3c.platformSoc, "DEV_COUNT", config.i3c.devices.size());
+    info("  PCIe: net={NET}", "NET", config.pcie.pcieNet);
+    info("  USB: net={NET}, targets={TGT_COUNT}", "NET", config.usb.usbNet,
          "TGT_COUNT", config.usb.targets.size());
 
     return true;
@@ -325,8 +336,8 @@ static bool loadFromJsonFile(const std::string& jsonPath,
                 config.localEid =
                     static_cast<std::uint8_t>(json_object_get_int(val));
             }
-            if (json_object_object_get_ex(
-                    entry, "RoutingTablePollingInterval", &val))
+            if (json_object_object_get_ex(entry, "RoutingTablePollingInterval",
+                                          &val))
             {
                 config.routingTable.pollingInterval =
                     std::chrono::seconds(json_object_get_int(val));
@@ -354,9 +365,8 @@ static bool loadFromJsonFile(const std::string& jsonPath,
                 int wlLen = json_object_array_length(val);
                 for (int j = 0; j < wlLen; j++)
                 {
-                    config.i2c.whitelist.insert(
-                        json_object_get_string(
-                            json_object_array_get_idx(val, j)));
+                    config.i2c.whitelist.insert(json_object_get_string(
+                        json_object_array_get_idx(val, j)));
                 }
             }
         }
@@ -455,8 +465,7 @@ static bool loadFromJsonFile(const std::string& jsonPath,
                     std::stoul(json_object_get_string(val), nullptr, 0));
             }
 
-            if (json_object_object_get_ex(
-                    entry, "SecondaryBusOwner", &val))
+            if (json_object_object_get_ex(entry, "SecondaryBusOwner", &val))
             {
                 device.isSecondaryBusOwner = json_object_get_boolean(val);
             }
@@ -468,9 +477,9 @@ static bool loadFromJsonFile(const std::string& jsonPath,
                 for (int j = 0; j < addrLen; j++)
                 {
                     char hex[3];
-                    snprintf(hex, sizeof(hex), "%02x",
-                                json_object_get_int(
-                                    json_object_array_get_idx(val, j)));
+                    snprintf(
+                        hex, sizeof(hex), "%02x",
+                        json_object_get_int(json_object_array_get_idx(val, j)));
                     pid += hex;
                 }
                 device.devicePid = pid;
@@ -569,22 +578,21 @@ static bool loadFromJsonFile(const std::string& jsonPath,
     json_object_put(root);
 
     info("MCTPReactorConfig loaded from JSON file {PATH}:", "PATH", jsonPath);
-    info("  I2C: enabled={EN}, net={NET}",
-         "EN", config.i2c.enabled, "NET", config.i2c.i2cNet);
-    info("  I3C: enabled={EN}, net={NET}, devices={DEV_COUNT}",
-         "EN", config.i3c.enabled, "NET", config.i3c.i3cNet,
-         "DEV_COUNT", config.i3c.devices.size());
-    info("  PCIe: enabled={EN}, net={NET}",
-         "EN", config.pcie.enabled, "NET", config.pcie.pcieNet);
-    info("  USB: enabled={EN}, net={NET}, targets={TGT_COUNT}",
-         "EN", config.usb.enabled, "NET", config.usb.usbNet,
-         "TGT_COUNT", config.usb.targets.size());
+    info("  I2C: enabled={EN}, net={NET}", "EN", config.i2c.enabled, "NET",
+         config.i2c.i2cNet);
+    info("  I3C: enabled={EN}, net={NET}, devices={DEV_COUNT}", "EN",
+         config.i3c.enabled, "NET", config.i3c.i3cNet, "DEV_COUNT",
+         config.i3c.devices.size());
+    info("  PCIe: enabled={EN}, net={NET}", "EN", config.pcie.enabled, "NET",
+         config.pcie.pcieNet);
+    info("  USB: enabled={EN}, net={NET}, targets={TGT_COUNT}", "EN",
+         config.usb.enabled, "NET", config.usb.usbNet, "TGT_COUNT",
+         config.usb.targets.size());
 
     return true;
 }
 
-MCTPReactorConfig MCTPReactorConfig::fromJsonFile(
-    const std::string& jsonPath)
+MCTPReactorConfig MCTPReactorConfig::fromJsonFile(const std::string& jsonPath)
 {
     MCTPReactorConfig config;
 
@@ -639,8 +647,8 @@ static void loadFromEntityManager(
 {
     ManagedObjectType managedObj;
     sdbusplus::message_t getManagedObjects = connection->new_method_call(
-        entityManagerName, inventoryPath,
-        "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
+        entityManagerName, inventoryPath, "org.freedesktop.DBus.ObjectManager",
+        "GetManagedObjects");
 
     sdbusplus::message_t reply = connection->call(getManagedObjects);
     reply.read(managedObj);
@@ -650,18 +658,15 @@ static void loadFromEntityManager(
         configInterfaceName("MCTPGeneralSetting");
     const std::string i2cConfigIntf =
         configInterfaceName("MCTPI2CConfiguration");
-    const std::string i2cTargetIntf =
-        configInterfaceName("MCTPI2CTarget");
+    const std::string i2cTargetIntf = configInterfaceName("MCTPI2CTarget");
     const std::string i3cConfigIntf =
         configInterfaceName("MCTPI3CConfiguration");
-    const std::string i3cTargetIntf =
-        configInterfaceName("MCTPI3CTarget");
+    const std::string i3cTargetIntf = configInterfaceName("MCTPI3CTarget");
     const std::string pcieConfigIntf =
         configInterfaceName("MCTPPCIeConfiguration");
     const std::string usbConfigIntf =
         configInterfaceName("MCTPUSBConfiguration");
-    const std::string usbTargetIntf =
-        configInterfaceName("MCTPUSBTarget");
+    const std::string usbTargetIntf = configInterfaceName("MCTPUSBTarget");
 
     for (const auto& [path, interfaces] : managedObj)
     {
@@ -671,8 +676,8 @@ static void loadFromEntityManager(
             {
                 config.localEid = static_cast<std::uint8_t>(
                     getIntProp(props, "DefaultLocalEid", config.localEid));
-                auto rtPoll = getIntProp(
-                    props, "RoutingTablePollingInterval", 0);
+                auto rtPoll =
+                    getIntProp(props, "RoutingTablePollingInterval", 0);
                 if (rtPoll > 0)
                 {
                     config.routingTable.pollingInterval =
@@ -699,8 +704,8 @@ static void loadFromEntityManager(
                 auto wlIt = props.find("Whitelist");
                 if (wlIt != props.end())
                 {
-                    auto* wl = std::get_if<std::vector<std::string>>(
-                        &wlIt->second);
+                    auto* wl =
+                        std::get_if<std::vector<std::string>>(&wlIt->second);
                     if (wl)
                     {
                         config.i2c.whitelist.clear();
@@ -747,13 +752,12 @@ static void loadFromEntityManager(
             {
                 I3CDeviceConfig device;
                 device.name = getStringProp(props, "Name");
-                device.busNum = static_cast<std::uint8_t>(
-                    getIntProp(props, "Bus"));
+                device.busNum =
+                    static_cast<std::uint8_t>(getIntProp(props, "Bus"));
                 device.role = getStringProp(props, "Role", "endpoint");
 
                 device.isTarget =
-                    getBoolProp(props, "I3CTarget",
-                                device.role != "bus-owner");
+                    getBoolProp(props, "I3CTarget", device.role != "bus-owner");
 
                 std::string pidMaskStr = getStringProp(props, "PidMask");
                 if (!pidMaskStr.empty())
@@ -842,15 +846,15 @@ static void loadFromEntityManager(
     }
 
     info("MCTPReactorConfig loaded from Entity Manager D-Bus:");
-    info("  I2C: enabled={EN}, net={NET}",
-         "EN", config.i2c.enabled, "NET", config.i2c.i2cNet);
-    info("  I3C: enabled={EN}, net={NET}, devices={DEV_COUNT}",
-         "EN", config.i3c.enabled, "NET", config.i3c.i3cNet,
-         "DEV_COUNT", config.i3c.devices.size());
-    info("  PCIe: enabled={EN}, net={NET}",
-         "EN", config.pcie.enabled, "NET", config.pcie.pcieNet);
-    info("  USB: enabled={EN}, net={NET}",
-         "EN", config.usb.enabled, "NET", config.usb.usbNet);
+    info("  I2C: enabled={EN}, net={NET}", "EN", config.i2c.enabled, "NET",
+         config.i2c.i2cNet);
+    info("  I3C: enabled={EN}, net={NET}, devices={DEV_COUNT}", "EN",
+         config.i3c.enabled, "NET", config.i3c.i3cNet, "DEV_COUNT",
+         config.i3c.devices.size());
+    info("  PCIe: enabled={EN}, net={NET}", "EN", config.pcie.enabled, "NET",
+         config.pcie.pcieNet);
+    info("  USB: enabled={EN}, net={NET}", "EN", config.usb.enabled, "NET",
+         config.usb.usbNet);
 }
 
 MCTPReactorConfig MCTPReactorConfig::fromEntityManager(

@@ -71,13 +71,15 @@ class MCTPDiscovery
     static void dispatchPlatformReset();
 
     /**
-     * @brief Remove all endpoints by enumerating D-Bus endpoint objects and calling Remove
+     * @brief Remove all endpoints by enumerating D-Bus endpoint objects and
+     * calling Remove
      * @return true if all Remove calls succeeded, false otherwise
      */
     bool removeAllEndpoint();
 
   protected:
-    MCTPDiscovery(const std::shared_ptr<sdbusplus::asio::connection>& connection);
+    MCTPDiscovery(
+        const std::shared_ptr<sdbusplus::asio::connection>& connection);
 
     /**
      * @brief Get MCTP link interfaces using netlink API
@@ -96,17 +98,17 @@ class MCTPDiscovery
      * @return true if the interface is up with the correct local EID
      */
     bool ensureInterfaceReady(const std::string& interfaceName, uint8_t eid,
-                              int net);
+                              int net, uint32_t mtu = 0);
 
     /**
      * @brief Response from AssignEndpoint D-Bus method call
      */
     struct AssignEndpointResponse
     {
-        std::uint8_t eid;           // Assigned endpoint ID
-        std::int32_t networkId;     // Network number
-        std::string interface;      // Interface name
-        bool probed;                // Probed flag
+        std::uint8_t eid;       // Assigned endpoint ID
+        std::int32_t networkId; // Network number
+        std::string interface;  // Interface name
+        bool probed;            // Probed flag
     };
 
     /**
@@ -116,12 +118,14 @@ class MCTPDiscovery
      * @param address Physical address vector
      * @return AssignEndpointResponse with assigned EID and network info
      */
-    AssignEndpointResponse assignEndpoint(const std::string& interfaceName,
-                                          const std::vector<std::uint8_t>& address);
+    AssignEndpointResponse assignEndpoint(
+        const std::string& interfaceName,
+        const std::vector<std::uint8_t>& address);
 
     /**
      * @brief Remove endpoint via D-Bus using network ID and endpoint ID
-     * D-Bus path format: /au/com/codeconstruct/mctp/networks/<network-id>/endpoints/<endpoint-id>
+     * D-Bus path format:
+     * /au/com/codeconstruct/mctp/networks/<network-id>/endpoints/<endpoint-id>
      */
     bool removeEndpoint(std::uint16_t networkId, std::uint8_t eid);
 

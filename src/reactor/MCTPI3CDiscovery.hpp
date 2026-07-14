@@ -52,21 +52,32 @@ struct I3CMctpDevice
 class MCTPI3CDiscovery : public MCTPDiscovery
 {
   public:
-    MCTPI3CDiscovery(
-        const std::shared_ptr<sdbusplus::asio::connection>& bus,
-        const I3CDiscoveryConfig& config);
+    MCTPI3CDiscovery(const std::shared_ptr<sdbusplus::asio::connection>& bus,
+                     const I3CDiscoveryConfig& config);
     ~MCTPI3CDiscovery() override = default;
 
     void run() override;
-    std::string_view name() const override { return "I3CDaemon"; }
+    std::string_view name() const override
+    {
+        return "I3CDaemon";
+    }
 
     /// Trigger pwrResetHandler() once per power cycle. Called by both the
     /// HostOn and PlatformReset hooks; the second call within the same
     /// power cycle is suppressed by the internal latch.
-    void onHostOn() override { triggerPwrReset("HostOn"); }
-    void onPlatformReset() override { triggerPwrReset("PlatformReset"); }
+    void onHostOn() override
+    {
+        triggerPwrReset("HostOn");
+    }
+    void onPlatformReset() override
+    {
+        triggerPwrReset("PlatformReset");
+    }
     /// Clear the once-per-cycle latch so the next power-on re-arms.
-    void onHostOff() override { resetTriggered = false; }
+    void onHostOff() override
+    {
+        resetTriggered = false;
+    }
 
     /// Main handler for platform reset events
     void pwrResetHandler();
@@ -101,7 +112,8 @@ class MCTPI3CDiscovery : public MCTPDiscovery
     void discoverI3CDevices();
 
     /// Convert 6-byte hardware address to hex string
-    std::string convertHwAddrToPidString(const uint8_t hwAddr[kI3cPidLen]) const;
+    std::string convertHwAddrToPidString(
+        const uint8_t hwAddr[kI3cPidLen]) const;
 
     /// Normalize PID string by removing leading zeros
     static std::string normalizePID(const std::string& pid);

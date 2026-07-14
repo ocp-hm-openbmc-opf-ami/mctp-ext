@@ -8,11 +8,8 @@ PHOSPHOR_LOG2_USING;
 
 MCTPPCIeDiscovery::MCTPPCIeDiscovery(
     const std::shared_ptr<sdbusplus::asio::connection>& bus,
-    const PCIeDiscoveryConfig& config) :
-    MCTPDiscovery(bus),
-    config(config)
-{
-}
+    const PCIeDiscoveryConfig& config) : MCTPDiscovery(bus), config(config)
+{}
 
 void MCTPPCIeDiscovery::run()
 {
@@ -27,7 +24,8 @@ void MCTPPCIeDiscovery::run()
 
     try
     {
-        std::string ifacePath = std::string(mctp::dbus::basePath) + "/interfaces/mctppci0";
+        std::string ifacePath =
+            std::string(mctp::dbus::basePath) + "/interfaces/mctppci0";
 
         auto method = bus->new_method_call(
             mctp::dbus::service.data(), ifacePath.c_str(),
@@ -42,13 +40,16 @@ void MCTPPCIeDiscovery::run()
     }
     catch (const std::exception& e)
     {
-        warning("Failed to call PCIe SetupEndpoint: {EXCEPTION}",
-                "EXCEPTION", e);
+        warning("Failed to call PCIe SetupEndpoint: {EXCEPTION}", "EXCEPTION",
+                e);
     }
 }
 
 void MCTPPCIeDiscovery::resetDiscoveryState()
 {
     lastResetTime = std::chrono::steady_clock::now();
-    ensureInterfaceReady("mctppci0", config.localEid, config.pcieNet);
+    if (!ensureInterfaceReady("mctppci0", config.localEid, config.pcieNet))
+    {
+        warning("resetDiscoveryState: failed to bring up mctppci0");
+    }
 }

@@ -71,6 +71,24 @@ void MCTPI2CDiscovery::run()
     staleArpAddresses.clear();
     arpAssignedThisCycle.clear();
 
+    // Atomically create the busy file; O_EXCL fails if it already exists
+    int busyFd = open(busyFilePath.data(), O_CREAT | O_EXCL | O_WRONLY, 0644);
+    if (busyFd < 0)
+    {
+        if (errno == EEXIST)
+        {
+            info("MCTPI2CDiscovery::run: {PATH} exists, skipping scan", "PATH",
+                 busyFilePath);
+        }
+        else
+        {
+            warning("MCTPI2CDiscovery::run: failed to create {PATH}: {ERROR}",
+                    "PATH", busyFilePath, "ERROR", strerror(errno));
+        }
+        return;
+    }
+    close(busyFd);
+
     // Phase 0: Validate existing routes FIRST (remove stale endpoints)
     validateExistingRoutes();
 
@@ -92,6 +110,7 @@ void MCTPI2CDiscovery::run()
     debug("Performing I2C hotplug discovery...");
     scanForNewDevices();
 
+    std::filesystem::remove(busyFilePath);
     debug("=== I2C Discovery Complete ===");
 }
 
@@ -204,7 +223,8 @@ void MCTPI2CDiscovery::scanForNewDevices()
               device);
 
         // Ensure interface is up and local EID is configured
-        if (!ensureInterfaceReady(device, config.localEid, i2cNet))
+        if (!ensureInterfaceReady(device, config.localEid, i2cNet,
+                                  i2cDefaultMtu))
         {
             continue;
         }
@@ -315,7 +335,8 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
             (busNum == 0) ? "mctpmbox0" : "mctpi2c" + std::to_string(busNum);
 
         // Ensure interface is up and local EID is configured
-        if (!ensureInterfaceReady(ifaceName, config.localEid, i2cNet))
+        if (!ensureInterfaceReady(ifaceName, config.localEid, i2cNet,
+                                  i2cDefaultMtu))
         {
             continue;
         }

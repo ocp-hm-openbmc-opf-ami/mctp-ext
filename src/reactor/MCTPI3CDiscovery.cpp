@@ -1,19 +1,24 @@
 #include "MCTPI3CDiscovery.hpp"
 
-#include <phosphor-logging/lg2.hpp>
-
-#include <cstring>
-#include <filesystem>
-#include <fstream>
+// clang-format off
+// <net/if.h> must precede <linux/mctp.h> to avoid IFF_* and struct
+// redefinition conflicts with the transitively included <linux/if.h>.
+#include <net/if.h>
+// clang-format on
 #include <linux/if_addr.h>
 #include <linux/if_link.h>
 #include <linux/mctp.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
-#include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include <phosphor-logging/lg2.hpp>
+
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 
 PHOSPHOR_LOG2_USING;
 
@@ -31,8 +36,7 @@ MCTPI3CDiscovery::MCTPI3CDiscovery(
     const std::shared_ptr<sdbusplus::asio::connection>& bus,
     const I3CDiscoveryConfig& config) :
     MCTPDiscovery(bus), mctpI3cNet(config.i3cNet),
-    busownerLocalEid(config.busOwnerEid),
-    endpointLocalEid(config.endpointEid),
+    busownerLocalEid(config.busOwnerEid), endpointLocalEid(config.endpointEid),
     platform(config.platformSoc)
 {
     // Populate device registry from config
@@ -89,8 +93,7 @@ void MCTPI3CDiscovery::triggerPwrReset(const char* source)
         return;
     }
     resetTriggered = true;
-    info("Triggering i3c pwrResetHandler (source={SOURCE})", "SOURCE",
-         source);
+    info("Triggering i3c pwrResetHandler (source={SOURCE})", "SOURCE", source);
     pwrResetHandler();
 }
 
@@ -121,15 +124,13 @@ void MCTPI3CDiscovery::pwrResetHandler()
         {
             device.detected = false;
             device.dynamicAddr = 0;
-            info("Reset detection status for controller device: {NAME}",
-                 "NAME", device.name);
+            info("Reset detection status for controller device: {NAME}", "NAME",
+                 device.name);
         }
-
     }
 
-/// @brief BHS Changes
-    if (platform == "aspeed-2600" ||
-        platform == "aspeed-2700")
+    /// @brief BHS Changes
+    if (platform == "aspeed-2600" || platform == "aspeed-2700")
     {
         /// Scan I3C bus and update hardware and dynamic address
         scanI3CBuses();
@@ -140,8 +141,8 @@ void MCTPI3CDiscovery::pwrResetHandler()
             if (!device.isTarget)
             {
                 info("Controller device {NAME} detection status: {STATUS}",
-                     "NAME", device.name,
-                     "STATUS", device.detected ? "DETECTED" : "NOT DETECTED");
+                     "NAME", device.name, "STATUS",
+                     device.detected ? "DETECTED" : "NOT DETECTED");
             }
         }
     }
@@ -233,8 +234,8 @@ void MCTPI3CDiscovery::scanI3CBuses()
     // Scan each bus — trigger sysfs rescan and match PIDs with retries
     for (auto& [busNum, devList] : controllerBuses)
     {
-        info("Scanning bus {BUS} for {COUNT} devices",
-             "BUS", busNum, "COUNT", devList.size());
+        info("Scanning bus {BUS} for {COUNT} devices", "BUS", busNum, "COUNT",
+             devList.size());
 
         // Map bus number to platform device path (matches mctp-i3c-rescan.sh)
         std::string busPath;
@@ -266,8 +267,8 @@ void MCTPI3CDiscovery::scanI3CBuses()
 
         if (busPath.empty())
         {
-            error("Invalid bus_num {BUS} for platform {PLAT}",
-                  "BUS", busNum, "PLAT", platform);
+            error("Invalid bus_num {BUS} for platform {PLAT}", "BUS", busNum,
+                  "PLAT", platform);
             continue;
         }
 
@@ -286,15 +287,15 @@ void MCTPI3CDiscovery::scanI3CBuses()
         std::string rescanFilePath;
         std::string i3cBusPath;
 
-        for (const auto& busEntry :
-             fs::directory_iterator(platformDevPath,
-                                    fs::directory_options::skip_permission_denied))
+        for (const auto& busEntry : fs::directory_iterator(
+                 platformDevPath,
+                 fs::directory_options::skip_permission_denied))
         {
             if (!busEntry.is_directory())
                 continue;
 
             std::string busDirName = busEntry.path().filename().string();
-            if (busDirName.find("i3c") < 0)
+            if (busDirName.find("i3c") == std::string::npos)
                 continue;
 
             std::string candidate =
@@ -313,29 +314,30 @@ void MCTPI3CDiscovery::scanI3CBuses()
             continue;
         }
 
-        info("Bus {BUS}: rescan file={RESCAN}, i3c bus path={PATH}",
-             "BUS", busNum, "RESCAN", rescanFilePath, "PATH", i3cBusPath);
+        info("Bus {BUS}: rescan file={RESCAN}, i3c bus path={PATH}", "BUS",
+             busNum, "RESCAN", rescanFilePath, "PATH", i3cBusPath);
 
-        // Retry loop: rescan and check devices until all detected or max retries
+        // Retry loop: rescan and check devices until all detected or max
+        // retries
         bool allDetected = false;
         for (int attempt = 0; attempt < maxRetries && !allDetected; ++attempt)
         {
-            debug("Rescan attempt {N} for bus {BUS}",
-                  "N", attempt + 1, "BUS", busNum);
+            debug("Rescan attempt {N} for bus {BUS}", "N", attempt + 1, "BUS",
+                  busNum);
 
             // Trigger rescan
             int fd = open(rescanFilePath.c_str(), O_WRONLY);
             if (fd < 0)
             {
-                error("Failed to open rescan file for bus {BUS}",
-                      "BUS", busNum);
+                error("Failed to open rescan file for bus {BUS}", "BUS",
+                      busNum);
                 break;
             }
             const char* one = "1";
             if (write(fd, one, 1) != 1)
             {
-                error("Failed to write to rescan file for bus {BUS}",
-                      "BUS", busNum);
+                error("Failed to write to rescan file for bus {BUS}", "BUS",
+                      busNum);
                 close(fd);
                 break;
             }
@@ -348,13 +350,12 @@ void MCTPI3CDiscovery::scanI3CBuses()
                 if (!fs::is_directory(devEntry))
                     continue;
 
-                std::string pidPath =
-                    devEntry.path().generic_string() + "/pid";
+                std::string pidPath = devEntry.path().generic_string() + "/pid";
                 if (!fs::exists(pidPath))
                     continue;
 
-                debug("Checking device entry: {PATH}",
-                      "PATH", devEntry.path().generic_string());
+                debug("Checking device entry: {PATH}", "PATH",
+                      devEntry.path().generic_string());
 
                 std::ifstream pidFile(pidPath);
                 if (!pidFile)
@@ -434,8 +435,7 @@ void MCTPI3CDiscovery::scanI3CBuses()
                                         std::stoull(dynAddr, nullptr, 16));
                                 }
                                 catch (...)
-                                {
-                                }
+                                {}
                             }
                         }
 
@@ -449,7 +449,9 @@ void MCTPI3CDiscovery::scanI3CBuses()
                             for (size_t i = 0; i < kI3cPidLen; i++)
                             {
                                 dev->hwAddr[i] =
-                                    (devicePid >> (8 * ((kI3cPidLen - 1) - i))) & 0xFF;
+                                    (devicePid >>
+                                     (8 * ((kI3cPidLen - 1) - i))) &
+                                    0xFF;
                             }
                         }
                     }
@@ -463,8 +465,8 @@ void MCTPI3CDiscovery::scanI3CBuses()
                 if (!dev->detected)
                 {
                     allDetected = false;
-                    info("Attempt {N}: device {NAME} not yet detected",
-                         "N", attempt + 1, "NAME", dev->name);
+                    info("Attempt {N}: device {NAME} not yet detected", "N",
+                         attempt + 1, "NAME", dev->name);
                     break;
                 }
             }
@@ -486,8 +488,7 @@ void MCTPI3CDiscovery::scanI3CBuses()
 // checkDeviceStatus — verify device is active via sysfs status file
 // ----------------------------------------------------------------
 
-bool MCTPI3CDiscovery::checkDeviceStatus(
-    const fs::path& devicePath) const
+bool MCTPI3CDiscovery::checkDeviceStatus(const fs::path& devicePath) const
 {
     fs::path statusFile = devicePath / "status";
     constexpr int maxAttempts = 3;
@@ -529,30 +530,29 @@ void MCTPI3CDiscovery::discoverI3CDevices()
 
     for (auto& [busNum, devList] : controllerBuses)
     {
-        debug("Scanning bus {BUS} for {COUNT} devices",
-              "BUS", busNum, "COUNT", devList.size());
+        debug("Scanning bus {BUS} for {COUNT} devices", "BUS", busNum, "COUNT",
+              devList.size());
 
         // Construct the discover file path for this bus
         std::string discoverFilePath =
             "/sys/bus/i3c/devices/i3c-" + std::to_string(busNum) + "/discover";
         if (!fs::exists(discoverFilePath))
         {
-            error("Discover file does not exist for bus {BUS}: {PATH}",
-                  "BUS", busNum, "PATH", discoverFilePath);
+            error("Discover file does not exist for bus {BUS}: {PATH}", "BUS",
+                  busNum, "PATH", discoverFilePath);
             continue;
         }
         int fd = open(discoverFilePath.c_str(), O_WRONLY);
         if (fd < 0)
         {
-            error("Failed to open discover file for bus {BUS}",
-                  "BUS", busNum);
+            error("Failed to open discover file for bus {BUS}", "BUS", busNum);
             continue;
         }
         const char* writeData = "1";
         if (write(fd, writeData, 1) != 1)
         {
-            error("Failed to write to discover file for bus {BUS}",
-                  "BUS", busNum);
+            error("Failed to write to discover file for bus {BUS}", "BUS",
+                  busNum);
             close(fd);
             continue;
         }
@@ -611,14 +611,14 @@ std::string MCTPI3CDiscovery::readDynamicAddress(const fs::path& path)
 // findDynamicAddressByPID
 // ----------------------------------------------------------------
 
-std::string MCTPI3CDiscovery::findDynamicAddressByPID(
-    const std::string& pid, I3CMctpDevice& device)
+std::string MCTPI3CDiscovery::findDynamicAddressByPID(const std::string& pid,
+                                                      I3CMctpDevice& device)
 {
     try
     {
         std::string normalizedPID = normalizePID(pid);
-        debug("Searching for PID: {PID} (normalized: {NPID})",
-              "PID", pid, "NPID", normalizedPID);
+        debug("Searching for PID: {PID} (normalized: {NPID})", "PID", pid,
+              "NPID", normalizedPID);
 
         const fs::path basePath("/sys/bus/i3c/devices");
         if (!fs::exists(basePath) || !fs::is_directory(basePath))
@@ -674,8 +674,8 @@ std::string MCTPI3CDiscovery::findDynamicAddressByPID(
                                     device.detected = true;
                                     info("Device detected: {NAME} (PID: "
                                          "{PID}, DynAddr: 0x{ADDR})",
-                                         "NAME", device.name,
-                                         "PID", pid, "ADDR", dynAddr);
+                                         "NAME", device.name, "PID", pid,
+                                         "ADDR", dynAddr);
                                 }
                                 return dynAddr;
                             }
@@ -687,14 +687,14 @@ std::string MCTPI3CDiscovery::findDynamicAddressByPID(
     }
     catch (const fs::filesystem_error& e)
     {
-        error("Filesystem error while searching for PID {PID}: {ERR}",
-              "PID", pid, "ERR", e.what());
+        error("Filesystem error while searching for PID {PID}: {ERR}", "PID",
+              pid, "ERR", e.what());
         return "";
     }
     catch (const std::exception& e)
     {
-        error("Error while searching for PID {PID}: {ERR}",
-              "PID", pid, "ERR", e.what());
+        error("Error while searching for PID {PID}: {ERR}", "PID", pid, "ERR",
+              e.what());
         return "";
     }
     return "";
@@ -743,7 +743,8 @@ int MCTPI3CDiscovery::setupLocalInterfaces()
         {
             // Bus owner interface: mctpi3cN
             int busIdx = (platform == "aspeed-2600" && device.busNumber >= 2)
-                ? (device.busNumber - 2) : device.busNumber;
+                             ? (device.busNumber - 2)
+                             : device.busNumber;
             interfaceName = "mctpi3c" + std::to_string(busIdx);
         }
         else
@@ -752,16 +753,16 @@ int MCTPI3CDiscovery::setupLocalInterfaces()
             interfaceName = findI3CTargetInterface();
             if (interfaceName.empty())
             {
-                error("No mctpi3c-target interface found for {NAME}",
-                      "NAME", device.name);
+                error("No mctpi3c-target interface found for {NAME}", "NAME",
+                      device.name);
                 continue;
             }
         }
 
         if (!ensureInterfaceReady(interfaceName, device.localEid, mctpI3cNet))
         {
-            error("Failed to configure local EID {EID} for {NAME}",
-                  "EID", lg2::hex, device.localEid, "NAME", device.name);
+            error("Failed to configure local EID {EID} for {NAME}", "EID",
+                  lg2::hex, device.localEid, "NAME", device.name);
         }
 
         // Add PID mapping for endpoint devices (remote is bus owner)
@@ -770,8 +771,7 @@ int MCTPI3CDiscovery::setupLocalInterfaces()
             if (addPidMapping(device.localEid, device.hwAddr) < 0)
             {
                 warning("Failed to add PID mapping for {NAME} EID {EID}",
-                        "NAME", device.name, "EID", lg2::hex,
-                        device.localEid);
+                        "NAME", device.name, "EID", lg2::hex, device.localEid);
             }
         }
     }
@@ -801,8 +801,8 @@ int MCTPI3CDiscovery::deviceDiscoveryWorkflow()
         {
             if (!sendDiscoveryNotify(device))
             {
-                error("sendDiscoveryNotify failed for {NAME}",
-                      "NAME", device.name);
+                error("sendDiscoveryNotify failed for {NAME}", "NAME",
+                      device.name);
             }
         }
     }
@@ -856,9 +856,10 @@ bool MCTPI3CDiscovery::sendDiscoveryNotify(const I3CMctpDevice& device)
     std::vector<std::uint8_t> formattedPid(device.hwAddr,
                                            device.hwAddr + pidSize);
 
-    // Determine interface name based on device type (matches mctp-i3c-rescan.sh)
-    // MCTPI3CTarget (role=endpoint): remote is I3C target, BMC is bus owner -> mctpi3cN
-    // MCTPI3CBusOwner (role=bus-owner): remote is bus owner, BMC is target -> mctpi3c-targetN
+    // Determine interface name based on device type (matches
+    // mctp-i3c-rescan.sh) MCTPI3CTarget (role=endpoint): remote is I3C target,
+    // BMC is bus owner -> mctpi3cN MCTPI3CBusOwner (role=bus-owner): remote is
+    // bus owner, BMC is target -> mctpi3c-targetN
     std::string interfaceName;
     if (!device.isTarget)
     {
@@ -886,10 +887,11 @@ bool MCTPI3CDiscovery::sendDiscoveryNotify(const I3CMctpDevice& device)
     std::string dbusIfaceName = interfaceName;
     for (auto& c : dbusIfaceName)
     {
-        if (c == '-') c = '_';
+        if (c == '-')
+            c = '_';
     }
-    std::string dbusPath = std::string(mctp::dbus::basePath) +
-                           "/interfaces/" + dbusIfaceName;
+    std::string dbusPath =
+        std::string(mctp::dbus::basePath) + "/interfaces/" + dbusIfaceName;
 
     constexpr int maxAttempts = 3;
     for (int attempt = 0; attempt < maxAttempts; ++attempt)
@@ -902,8 +904,8 @@ bool MCTPI3CDiscovery::sendDiscoveryNotify(const I3CMctpDevice& device)
             method.append(formattedPid);
             bus->call(method);
 
-            info("DiscoveryNotify sent for {NAME} (interface: {IFACE})",
-                 "NAME", device.name, "IFACE", interfaceName);
+            info("DiscoveryNotify sent for {NAME} (interface: {IFACE})", "NAME",
+                 device.name, "IFACE", interfaceName);
             return true;
         }
         catch (const std::exception& e)
@@ -945,8 +947,8 @@ std::string MCTPI3CDiscovery::findI3CTargetInterface() const
     {
         if (attempt > 0)
         {
-            debug("findI3CTargetInterface: retry {N}/{MAX}",
-                  "N", attempt + 1, "MAX", maxRetries);
+            debug("findI3CTargetInterface: retry {N}/{MAX}", "N", attempt + 1,
+                  "MAX", maxRetries);
             usleep(retryDelayUs);
         }
 
@@ -965,16 +967,15 @@ std::string MCTPI3CDiscovery::findI3CTargetInterface() const
                 // Also check underscore in case of variant drivers
                 if (ifName.find("mctpi3c-target") == 0)
                 {
-                    debug("findI3CTargetInterface: found {IFACE}",
-                          "IFACE", ifName);
+                    debug("findI3CTargetInterface: found {IFACE}", "IFACE",
+                          ifName);
                     return ifName;
                 }
             }
         }
         catch (const std::exception& e)
         {
-            warning("findI3CTargetInterface error: {ERR}",
-                    "ERR", e.what());
+            warning("findI3CTargetInterface error: {ERR}", "ERR", e.what());
         }
     }
 
@@ -983,7 +984,6 @@ std::string MCTPI3CDiscovery::findI3CTargetInterface() const
             "N", maxRetries);
     return "";
 }
-
 
 // ----------------------------------------------------------------
 // deleteAllPidMappings — query kernel for all PID mappings and delete each
@@ -1050,8 +1050,8 @@ int MCTPI3CDiscovery::deleteAllPidMappings()
         return 0;
     }
 
-    info("deleteAllPidMappings: found {COUNT} PID mappings to delete",
-         "COUNT", bulk.count);
+    info("deleteAllPidMappings: found {COUNT} PID mappings to delete", "COUNT",
+         bulk.count);
 
     // Step 2: Delete each mapping
     int deleted = 0;
@@ -1078,8 +1078,8 @@ int MCTPI3CDiscovery::deleteAllPidMappings()
     }
 
     close(sock);
-    info("deleteAllPidMappings: deleted {COUNT} PID mappings",
-         "COUNT", deleted);
+    info("deleteAllPidMappings: deleted {COUNT} PID mappings", "COUNT",
+         deleted);
     return deleted;
 }
 
@@ -1108,9 +1108,8 @@ int MCTPI3CDiscovery::addPidMapping(uint8_t eid, const uint8_t* pid)
 
     info("addPidMapping: EID {EID} -> PID "
          "{P0}:{P1}:{P2}:{P3}:{P4}:{P5}",
-         "EID", lg2::hex, eid,
-         "P0", lg2::hex, req.pid[0], "P1", lg2::hex, req.pid[1],
-         "P2", lg2::hex, req.pid[2], "P3", lg2::hex, req.pid[3],
+         "EID", lg2::hex, eid, "P0", lg2::hex, req.pid[0], "P1", lg2::hex,
+         req.pid[1], "P2", lg2::hex, req.pid[2], "P3", lg2::hex, req.pid[3],
          "P4", lg2::hex, req.pid[4], "P5", lg2::hex, req.pid[5]);
 
     close(sock);

@@ -1,22 +1,27 @@
 
 #include "MCTPDiscovery.hpp"
+
 #include "MCTPConstants.hpp"
 
-#include <phosphor-logging/lg2.hpp>
-#include <sdbusplus/asio/connection.hpp>
-
-#include <format>
+#include <errno.h>
+// clang-format off
+// <net/if.h> must precede <linux/mctp.h> to avoid IFF_* and struct
+// redefinition conflicts with the transitively included <linux/if.h>.
+#include <net/if.h>
+// clang-format on
 #include <linux/if_link.h>
 #include <linux/mctp.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
-#include <net/if.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <cstring>
-#include <errno.h>
+
+#include <phosphor-logging/lg2.hpp>
+#include <sdbusplus/asio/connection.hpp>
 
 #include <algorithm>
+#include <cstring>
+#include <format>
 #include <mutex>
 
 PHOSPHOR_LOG2_USING;
@@ -94,8 +99,7 @@ void MCTPDiscovery::dispatchPlatformReset()
 }
 
 MCTPDiscovery::AssignEndpointResponse MCTPDiscovery::assignEndpoint(
-    const std::string& interfaceName,
-    const std::vector<std::uint8_t>& address)
+    const std::string& interfaceName, const std::vector<std::uint8_t>& address)
 {
     AssignEndpointResponse response = {0, 0, "", false};
 
@@ -103,13 +107,11 @@ MCTPDiscovery::AssignEndpointResponse MCTPDiscovery::assignEndpoint(
 
     try
     {
-        std::string objPath = std::format("{}{}",
-                                          mctp::dbus::interfacesPath,
-                                          interfaceName);
+        std::string objPath =
+            std::format("{}{}", mctp::dbus::interfacesPath, interfaceName);
 
         auto m = bus->new_method_call(
-            std::string(mctp::dbus::service).c_str(),
-            objPath.c_str(),
+            std::string(mctp::dbus::service).c_str(), objPath.c_str(),
             std::string(mctp::dbus::busOwnerInterface).c_str(),
             "AssignEndpoint");
         m.append(address);
@@ -140,15 +142,13 @@ bool MCTPDiscovery::removeEndpoint(std::uint16_t networkId, std::uint8_t eid)
 
     try
     {
-        std::string objPath = std::format(
-            "{}/{}/endpoints/{}",
-            mctp::dbus::networksPath, networkId, static_cast<int>(eid));
+        std::string objPath =
+            std::format("{}/{}/endpoints/{}", mctp::dbus::networksPath,
+                        networkId, static_cast<int>(eid));
 
         auto m = bus->new_method_call(
-            std::string(mctp::dbus::service).c_str(),
-            objPath.c_str(),
-            std::string(mctp::dbus::endpointInterface).c_str(),
-            "Remove");
+            std::string(mctp::dbus::service).c_str(), objPath.c_str(),
+            std::string(mctp::dbus::endpointInterface).c_str(), "Remove");
         bus->call(m);
 
         debug("Endpoint removed successfully: network={NET}, EID={EID}", "NET",
@@ -162,9 +162,8 @@ bool MCTPDiscovery::removeEndpoint(std::uint16_t networkId, std::uint8_t eid)
     }
 }
 
-bool MCTPDiscovery::assignEndpointStatic(const std::string& device,
-                                         std::uint8_t eid,
-                                         const std::string& hexAddr)
+bool MCTPDiscovery::assignEndpointStatic(
+    const std::string& device, std::uint8_t eid, const std::string& hexAddr)
 {
     try
     {
@@ -194,13 +193,13 @@ bool MCTPDiscovery::assignEndpointStatic(const std::string& device,
 }
 
 bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
-                                         uint8_t eid, int net)
+                                         uint8_t eid, int net, uint32_t mtu)
 {
     unsigned int ifIdx = if_nametoindex(interfaceName.c_str());
     if (ifIdx == 0)
     {
-        warning("ensureInterfaceReady: interface {INTF} not found",
-                "INTF", interfaceName);
+        warning("ensureInterfaceReady: interface {INTF} not found", "INTF",
+                interfaceName);
         return false;
     }
 
@@ -222,7 +221,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
 
     // Step 1: Check IFF_UP via RTM_GETLINK
     {
-        struct {
+        struct
+        {
             struct nlmsghdr nh;
             struct ifinfomsg ifmsg;
         } req = {};
@@ -244,8 +244,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
                 if (NLMSG_OK(nlh, static_cast<size_t>(len)) &&
                     nlh->nlmsg_type == RTM_NEWLINK)
                 {
-                    auto* ifm = reinterpret_cast<struct ifinfomsg*>(
-                        NLMSG_DATA(nlh));
+                    auto* ifm =
+                        reinterpret_cast<struct ifinfomsg*>(NLMSG_DATA(nlh));
                     isUp = (ifm->ifi_flags & IFF_UP) != 0;
                 }
             }
@@ -254,7 +254,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
 
     // Step 2: Check local EID via RTM_GETADDR dump
     {
-        struct {
+        struct
+        {
             struct nlmsghdr nh;
             struct ifaddrmsg ifmsg;
         } areq = {};
@@ -293,8 +294,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
                         continue;
                     }
 
-                    auto* ifa = reinterpret_cast<struct ifaddrmsg*>(
-                        NLMSG_DATA(nlh));
+                    auto* ifa =
+                        reinterpret_cast<struct ifaddrmsg*>(NLMSG_DATA(nlh));
                     if (static_cast<int>(ifa->ifa_index) != ifIndex)
                         continue;
 
@@ -306,8 +307,7 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
                             RTA_PAYLOAD(attr) >= sizeof(uint8_t))
                         {
                             uint8_t localEid = 0;
-                            memcpy(&localEid, RTA_DATA(attr),
-                                   sizeof(localEid));
+                            memcpy(&localEid, RTA_DATA(attr), sizeof(localEid));
                             if (localEid == eid)
                             {
                                 eidMatched = true;
@@ -326,20 +326,24 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
     // Remove other local EIDs that don't match the expected one
     for (uint8_t other : otherEids)
     {
-        struct {
+        struct
+        {
             struct nlmsghdr nh;
             struct ifaddrmsg ifmsg;
-            struct rtattr rta;
-            uint8_t data[4];
+            // Single flat buffer for the rtattr header + 1-byte EID payload.
+            // Avoids analyzer false-positive: RTA_DATA() computes
+            // (char*)rta + sizeof(rtattr), which is within this buffer.
+            alignas(struct rtattr) uint8_t rtabuf[RTA_SPACE(sizeof(uint8_t))];
         } dreq = {};
 
         dreq.nh.nlmsg_type = RTM_DELADDR;
         dreq.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
         dreq.ifmsg.ifa_index = ifIndex;
         dreq.ifmsg.ifa_family = AF_MCTP;
-        dreq.rta.rta_type = IFA_LOCAL;
-        dreq.rta.rta_len = RTA_LENGTH(sizeof(other));
-        memcpy(RTA_DATA(&dreq.rta), &other, sizeof(other));
+        auto* dreqRta = reinterpret_cast<struct rtattr*>(dreq.rtabuf);
+        dreqRta->rta_type = IFA_LOCAL;
+        dreqRta->rta_len = RTA_LENGTH(sizeof(other));
+        memcpy(RTA_DATA(dreqRta), &other, sizeof(other));
         dreq.nh.nlmsg_len =
             NLMSG_LENGTH(sizeof(dreq.ifmsg)) + RTA_SPACE(sizeof(other));
 
@@ -361,8 +365,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
     // Already up with correct EID — nothing to do
     if (isUp && eidMatched)
     {
-        debug("ensureInterfaceReady: {INTF} is up with EID {EID}",
-              "INTF", interfaceName, "EID", lg2::hex, eid);
+        debug("ensureInterfaceReady: {INTF} is up with EID {EID}", "INTF",
+              interfaceName, "EID", lg2::hex, eid);
         close(sock);
         return true;
     }
@@ -374,7 +378,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
     // Step 3: Bring interface up (RTM_NEWLINK with IFF_UP)
     if (!isUp)
     {
-        struct {
+        struct
+        {
             struct nlmsghdr nh;
             struct ifinfomsg ifmsg;
         } req = {};
@@ -390,8 +395,9 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
                    reinterpret_cast<struct sockaddr*>(&nlAddr),
                    sizeof(nlAddr)) < 0)
         {
-            error("ensureInterfaceReady: send RTM_NEWLINK (up) failed for {INTF}",
-                  "INTF", interfaceName);
+            error(
+                "ensureInterfaceReady: send RTM_NEWLINK (up) failed for {INTF}",
+                "INTF", interfaceName);
             close(sock);
             return false;
         }
@@ -400,20 +406,24 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
     // Step 4: Add MCTP address (RTM_NEWADDR) if EID not present
     if (!eidMatched)
     {
-        struct {
+        struct
+        {
             struct nlmsghdr nh;
             struct ifaddrmsg ifmsg;
-            struct rtattr rta;
-            uint8_t data[4];
+            // Single flat buffer for the rtattr header + 1-byte EID payload.
+            // Avoids analyzer false-positive: RTA_DATA() computes
+            // (char*)rta + sizeof(rtattr), which is within this buffer.
+            alignas(struct rtattr) uint8_t rtabuf[RTA_SPACE(sizeof(uint8_t))];
         } req = {};
 
         req.nh.nlmsg_type = RTM_NEWADDR;
         req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
         req.ifmsg.ifa_index = ifIndex;
         req.ifmsg.ifa_family = AF_MCTP;
-        req.rta.rta_type = IFA_LOCAL;
-        req.rta.rta_len = RTA_LENGTH(sizeof(eid));
-        memcpy(RTA_DATA(&req.rta), &eid, sizeof(eid));
+        auto* reqRta = reinterpret_cast<struct rtattr*>(req.rtabuf);
+        reqRta->rta_type = IFA_LOCAL;
+        reqRta->rta_len = RTA_LENGTH(sizeof(eid));
+        memcpy(RTA_DATA(reqRta), &eid, sizeof(eid));
         req.nh.nlmsg_len =
             NLMSG_LENGTH(sizeof(req.ifmsg)) + RTA_SPACE(sizeof(eid));
 
@@ -437,7 +447,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
 
     // Step 5: Set MCTP network on link (RTM_NEWLINK with nested attrs)
     {
-        struct {
+        struct
+        {
             struct nlmsghdr nh;
             struct ifinfomsg ifmsg;
             uint8_t attrBuf[128];
@@ -466,8 +477,7 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         uint8_t midBuf[64];
         auto* midRta = reinterpret_cast<struct rtattr*>(midBuf);
         midRta->rta_type = AF_MCTP | NLA_F_NESTED;
-        midRta->rta_len =
-            static_cast<unsigned short>(RTA_LENGTH(innerLen));
+        midRta->rta_len = static_cast<unsigned short>(RTA_LENGTH(innerLen));
         memcpy(RTA_DATA(midRta), innerBuf, innerLen);
         size_t midLen = RTA_SPACE(innerLen);
 
@@ -475,8 +485,7 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         auto* outerRta = reinterpret_cast<struct rtattr*>(
             reinterpret_cast<uint8_t*>(&req) + req.nh.nlmsg_len);
         outerRta->rta_type = IFLA_AF_SPEC | NLA_F_NESTED;
-        outerRta->rta_len =
-            static_cast<unsigned short>(RTA_LENGTH(midLen));
+        outerRta->rta_len = static_cast<unsigned short>(RTA_LENGTH(midLen));
         memcpy(RTA_DATA(outerRta), midBuf, midLen);
         req.nh.nlmsg_len += RTA_SPACE(midLen);
 
@@ -498,6 +507,36 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         }
     }
 
+    // Step 6: Set MTU if requested
+    if (mtu != 0)
+    {
+        struct
+        {
+            struct nlmsghdr nh;
+            struct ifinfomsg ifmsg;
+            struct rtattr rta;
+            uint32_t data;
+        } req = {};
+
+        req.nh.nlmsg_type = RTM_NEWLINK;
+        req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+        req.ifmsg.ifi_index = ifIndex;
+        req.rta.rta_type = IFLA_MTU;
+        req.rta.rta_len = RTA_LENGTH(sizeof(mtu));
+        memcpy(&req.data, &mtu, sizeof(mtu));
+        req.nh.nlmsg_len =
+            NLMSG_LENGTH(sizeof(req.ifmsg)) + RTA_SPACE(sizeof(mtu));
+
+        if (sendto(sock, &req, req.nh.nlmsg_len, 0,
+                   reinterpret_cast<struct sockaddr*>(&nlAddr),
+                   sizeof(nlAddr)) < 0)
+        {
+            warning(
+                "ensureInterfaceReady: send RTM_NEWLINK (mtu) failed for {INTF}",
+                "INTF", interfaceName);
+        }
+    }
+
     close(sock);
     info("ensureInterfaceReady: configured EID {EID} on {INTF} net {NET}",
          "EID", lg2::hex, eid, "INTF", interfaceName, "NET", net);
@@ -512,13 +551,18 @@ bool MCTPDiscovery::removeAllEndpoint()
     try
     {
         auto m = bus->new_method_call(
-            std::string(service).c_str(),
-            std::string(basePath).c_str(),
-            "org.freedesktop.DBus.ObjectManager",
-            "GetManagedObjects");
+            std::string(service).c_str(), std::string(basePath).c_str(),
+            "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
         auto reply = bus->call(m);
 
-        std::map<sdbusplus::message::object_path, std::map<std::string, std::map<std::string, std::variant<std::vector<uint8_t>, uint8_t, uint16_t, std::string, bool, int32_t>>>> objects;
+        std::map<
+            sdbusplus::message::object_path,
+            std::map<
+                std::string,
+                std::map<std::string,
+                         std::variant<std::vector<uint8_t>, uint8_t, uint16_t,
+                                      std::string, bool, int32_t>>>>
+            objects;
         reply.read(objects);
 
         for (const auto& [objPath, ifaces] : objects)
@@ -529,16 +573,13 @@ bool MCTPDiscovery::removeAllEndpoint()
                 continue;
             }
 
-            info("Removing endpoint at {PATH}", "PATH",
-                 std::string(objPath));
+            info("Removing endpoint at {PATH}", "PATH", std::string(objPath));
 
             try
             {
                 auto rm = bus->new_method_call(
-                    std::string(service).c_str(),
-                    objPath.str.c_str(),
-                    std::string(endpointInterface).c_str(),
-                    "Remove");
+                    std::string(service).c_str(), objPath.str.c_str(),
+                    std::string(endpointInterface).c_str(), "Remove");
                 bus->call(rm);
             }
             catch (const sdbusplus::exception_t& e)
@@ -552,8 +593,8 @@ bool MCTPDiscovery::removeAllEndpoint()
                 }
                 else
                 {
-                    warning("Failed to remove endpoint {PATH}: {ERROR}",
-                            "PATH", std::string(objPath), "ERROR", e.what());
+                    warning("Failed to remove endpoint {PATH}: {ERROR}", "PATH",
+                            std::string(objPath), "ERROR", e.what());
                     allSuccess = false;
                 }
             }
@@ -561,7 +602,8 @@ bool MCTPDiscovery::removeAllEndpoint()
     }
     catch (const std::exception& e)
     {
-        warning("Failed to enumerate or remove endpoints: {ERR}", "ERR", e.what());
+        warning("Failed to enumerate or remove endpoints: {ERR}", "ERR",
+                e.what());
         return false;
     }
     return allSuccess;
@@ -645,8 +687,7 @@ std::vector<std::string> MCTPDiscovery::getLinksViaNetlink(
 
             // Parse netlink messages
             for (struct nlmsghdr* nlh = (struct nlmsghdr*)buffer;
-                 NLMSG_OK(nlh, (unsigned int)len);
-                 nlh = NLMSG_NEXT(nlh, len))
+                 NLMSG_OK(nlh, (unsigned int)len); nlh = NLMSG_NEXT(nlh, len))
             {
                 if (nlh->nlmsg_type == NLMSG_DONE)
                 {
@@ -668,7 +709,8 @@ std::vector<std::string> MCTPDiscovery::getLinksViaNetlink(
 
                 struct ifinfomsg* ifinfo = (struct ifinfomsg*)NLMSG_DATA(nlh);
                 struct rtattr* rta =
-                    (struct rtattr*)((char*)ifinfo + NLMSG_ALIGN(sizeof(*ifinfo)));
+                    (struct rtattr*)((char*)ifinfo +
+                                     NLMSG_ALIGN(sizeof(*ifinfo)));
                 int rtlen = NLMSG_PAYLOAD(nlh, sizeof(*ifinfo));
 
                 std::string ifname;
