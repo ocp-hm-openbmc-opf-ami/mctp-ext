@@ -913,9 +913,9 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
 
             if (!prepareOk)
             {
-                warning("Failed to send ARP prepare commands on bus {BUS} "
-                        "after {RETRIES} retries",
-                        "BUS", busNum, "RETRIES", maxRetries);
+                debug("Failed to send ARP prepare commands on bus {BUS} "
+                      "after {RETRIES} retries",
+                      "BUS", busNum, "RETRIES", maxRetries);
                 close(fd);
                 return false;
             }
@@ -961,9 +961,8 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
 
         if (!gotUdid)
         {
-            warning(
-                "Failed to read UDID from bus {BUS} after {RETRIES} retries",
-                "BUS", busNum, "RETRIES", maxRetries);
+            debug("Failed to read UDID from bus {BUS} after {RETRIES} retries",
+                  "BUS", busNum, "RETRIES", maxRetries);
             close(fd);
             return false;
         }

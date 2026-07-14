@@ -35,18 +35,11 @@ void MCTPRoutingTableDiscovery::run()
         ManagedObjectType objectMap;
         reply.read(objectMap);
 
-        info("=== MCTP Bridge Objects ===");
-        info("Service: {SERVICE}", "SERVICE", mctp::dbus::service);
-        info("Interface: {INTERFACE}", "INTERFACE",
-             mctp::dbus::bridgeInterface);
-
         for (const auto& [path, interfaces] : objectMap)
         {
             if (interfaces.find(mctp::dbus::bridgeInterface.data()) !=
                 interfaces.end())
             {
-                info("Found bridge: {BRIDGE_PATH}", "BRIDGE_PATH", path.str);
-
                 try
                 {
                     auto routingCall = bus->new_method_call(
@@ -56,9 +49,6 @@ void MCTPRoutingTableDiscovery::run()
                     // GetRoutingTable returns SD_BUS_NO_RESULT in mctpd;
                     // it triggers async routing table retrieval internally.
                     bus->call(routingCall, 3000ms);
-
-                    info("Triggered routing table retrieval for {BRIDGE_PATH}",
-                         "BRIDGE_PATH", path.str);
                 }
                 catch (const std::exception& e)
                 {
