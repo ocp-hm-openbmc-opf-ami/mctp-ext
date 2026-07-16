@@ -6,6 +6,8 @@
 #include "MCTPDiscovery.hpp"
 #include "MCTPReactorConfig.hpp"
 
+#include <boost/asio/steady_timer.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/asio/connection.hpp>
 
 #include <format>
@@ -44,10 +46,22 @@ class MCTPI2CDiscovery : public MCTPDiscovery
         return "I2C";
     }
 
-    /// Reset ARP state for fresh discovery on host power-on.
+    /// Reset all state and restart discovery on host power-on.
     void onHostOn() override
     {
-        resetARPState();
+        scheduleDelayedRun("HostOn");
+    }
+
+    /// Clear state on host power-off, then re-discover after a delay.
+    void onHostOff() override
+    {
+        scheduleDelayedRun("HostOff");
+    }
+
+    /// Reset all state and restart discovery on platform reset.
+    void onPlatformReset() override
+    {
+        scheduleDelayedRun("PlatformReset");
     }
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
@@ -58,19 +72,44 @@ class MCTPI2CDiscovery : public MCTPDiscovery
 #endif
 
     /**
-     * @brief Reset ARP state when host state changes
-     * Clears next ARP address and processed buses for fresh discovery on boot
+     * @brief Clear all discovery state and caches for a fresh start
      */
-    void resetARPState()
+    void resetAllState()
     {
         nextArpAddress = arpStartAddress;
         processedBuses.clear();
         staleArpAddresses.clear();
+        arpAssignedThisCycle.clear();
+    }
+
+    /**
+     * @brief Schedule a delayed discovery run after 10 seconds.
+     * Resets all state immediately.  If called again before the timer
+     * fires, the previous pending run is cancelled (no duplicates).
+     */
+    void scheduleDelayedRun(const char* reason)
+    {
+        resetAllState();
+        // expires_after cancels any previously pending async_wait,
+        // so only the latest event's callback will fire.
+        delayedRunTimer.expires_after(std::chrono::seconds(10));
+        delayedRunTimer.async_wait(
+            [this, reason](const boost::system::error_code& ec) {
+                if (!ec)
+                {
+                    lg2::debug("Delayed discovery triggered by {REASON}",
+                               "REASON", reason);
+                    run();
+                }
+            });
     }
 
   private:
     const I2CDiscoveryConfig& config;
     std::uint16_t i2cNet = 1;
+
+    // Timer for delayed discovery after host events
+    boost::asio::steady_timer delayedRunTimer{bus->get_io_context()};
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
     std::shared_ptr<MCTPReactor> reactor;
@@ -208,9 +247,11 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     bool isInWhitelist(const std::string& hexAddr) const;
 
     /**
-     * @brief Check if device with bus and address exists in D-Bus
+     * @brief Check if a bus has MUX child buses (i2c-N subdirectories)
+     * @param busNum I2C bus number
+     * @return true if the bus has MUX children
      */
-    bool isDeviceExistsInDBus(std::uint8_t busNum, const std::string& hexAddr);
+    bool hasMuxChildren(std::uint8_t busNum) const;
 
     /**
      * @brief Phase 1: Validate existing routes

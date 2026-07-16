@@ -50,6 +50,6 @@ void MCTPPCIeDiscovery::resetDiscoveryState()
     lastResetTime = std::chrono::steady_clock::now();
     if (!ensureInterfaceReady("mctppci0", config.localEid, config.pcieNet))
     {
-        warning("resetDiscoveryState: failed to bring up mctppci0");
+        warning("PCIe discovery: failed to bring up mctppci0");
     }
 }
