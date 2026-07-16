@@ -403,49 +403,10 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         }
     }
 
-    // Step 4: Add MCTP address (RTM_NEWADDR) if EID not present
-    if (!eidMatched)
-    {
-        struct
-        {
-            struct nlmsghdr nh;
-            struct ifaddrmsg ifmsg;
-            // Single flat buffer for the rtattr header + 1-byte EID payload.
-            // Avoids analyzer false-positive: RTA_DATA() computes
-            // (char*)rta + sizeof(rtattr), which is within this buffer.
-            alignas(struct rtattr) uint8_t rtabuf[RTA_SPACE(sizeof(uint8_t))];
-        } req = {};
-
-        req.nh.nlmsg_type = RTM_NEWADDR;
-        req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-        req.ifmsg.ifa_index = ifIndex;
-        req.ifmsg.ifa_family = AF_MCTP;
-        auto* reqRta = reinterpret_cast<struct rtattr*>(req.rtabuf);
-        reqRta->rta_type = IFA_LOCAL;
-        reqRta->rta_len = RTA_LENGTH(sizeof(eid));
-        memcpy(RTA_DATA(reqRta), &eid, sizeof(eid));
-        req.nh.nlmsg_len =
-            NLMSG_LENGTH(sizeof(req.ifmsg)) + RTA_SPACE(sizeof(eid));
-
-        int ret = sendto(sock, &req, req.nh.nlmsg_len, 0,
-                         reinterpret_cast<struct sockaddr*>(&nlAddr),
-                         sizeof(nlAddr));
-        if (ret < 0)
-        {
-            error("ensureInterfaceReady: send RTM_NEWADDR failed for EID {EID}",
-                  "EID", lg2::hex, eid);
-            close(sock);
-            return false;
-        }
-        if (ret != static_cast<int>(req.nh.nlmsg_len))
-        {
-            error("ensureInterfaceReady: RTM_NEWADDR sendto short");
-            close(sock);
-            return false;
-        }
-    }
-
-    // Step 5: Set MCTP network on link (RTM_NEWLINK with nested attrs)
+    // Step 4: Set MCTP network on link (RTM_NEWLINK with nested attrs)
+    // Must set net BEFORE adding the EID (Step 5). When both mctppci0 and
+    // mctpi2c* share EID=10 and mctppci0 is still on default net=1,
+    // mctp_route_add_local() silently fails with -EEXIST (duplicate route).
     {
         struct
         {
@@ -482,8 +443,9 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         size_t midLen = RTA_SPACE(innerLen);
 
         // Outer: IFLA_AF_SPEC
-        auto* outerRta = reinterpret_cast<struct rtattr*>(
-            reinterpret_cast<uint8_t*>(&req) + req.nh.nlmsg_len);
+        // Avoids analyzer false-positive: RTA_DATA() computes
+        // (char*)rta + sizeof(rtattr), which is within attrBuf.
+        auto* outerRta = reinterpret_cast<struct rtattr*>(req.attrBuf);
         outerRta->rta_type = IFLA_AF_SPEC | NLA_F_NESTED;
         outerRta->rta_len = static_cast<unsigned short>(RTA_LENGTH(midLen));
         memcpy(RTA_DATA(outerRta), midBuf, midLen);
@@ -502,6 +464,47 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         if (ret != static_cast<int>(req.nh.nlmsg_len))
         {
             error("ensureInterfaceReady: RTM_NEWLINK sendto short");
+            close(sock);
+            return false;
+        }
+    }
+
+    // Step 5: Add MCTP address (RTM_NEWADDR) if EID not present.
+    // Done after Step 4 (set net) so mctp_route_add_local() creates the
+    // local route in the correct net, not the default net=1.
+    if (!eidMatched)
+    {
+        struct
+        {
+            struct nlmsghdr nh;
+            struct ifaddrmsg ifmsg;
+            struct rtattr rta;
+            uint8_t data[4];
+        } req = {};
+
+        req.nh.nlmsg_type = RTM_NEWADDR;
+        req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+        req.ifmsg.ifa_index = ifIndex;
+        req.ifmsg.ifa_family = AF_MCTP;
+        req.rta.rta_type = IFA_LOCAL;
+        req.rta.rta_len = RTA_LENGTH(sizeof(eid));
+        memcpy(req.data, &eid, sizeof(eid));
+        req.nh.nlmsg_len =
+            NLMSG_LENGTH(sizeof(req.ifmsg)) + RTA_SPACE(sizeof(eid));
+
+        int ret = sendto(sock, &req, req.nh.nlmsg_len, 0,
+                         reinterpret_cast<struct sockaddr*>(&nlAddr),
+                         sizeof(nlAddr));
+        if (ret < 0)
+        {
+            error("ensureInterfaceReady: send RTM_NEWADDR failed for EID {EID}",
+                  "EID", lg2::hex, eid);
+            close(sock);
+            return false;
+        }
+        if (ret != static_cast<int>(req.nh.nlmsg_len))
+        {
+            error("ensureInterfaceReady: RTM_NEWADDR sendto short");
             close(sock);
             return false;
         }
