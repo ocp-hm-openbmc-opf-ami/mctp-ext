@@ -879,14 +879,12 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             return false;
         }
 
-        // Step 3: Validate ASF/MCTP support bit (UDID byte 8, bit 5)
-        // Some devices don't set ASF but still respond to ARP - proceed anyway
-        if (udid.size() > 8 && !(udid[8] & 0x20))
-        {
-            debug("Device on bus {BUS} ASF bit not set in UDID byte 8 "
-                  "(0x{BYTE}), proceeding with ARP anyway",
-                  "BUS", busNum, "BYTE", std::format("{:02x}", udid[8]));
-        }
+        // Step 3: Validate ASF/MCTP support bit (Interface field bit 5).
+        // The UDID Interface field is bits [79:64] = udid[6:7]; udid[7] holds
+        // Interface[7:0] where bit 5 = ASF.  A device that doesn't set this
+        // bit doesn't support MCTP; we keep its original slave address
+        // instead of assigning a new one.
+        bool mctpSupported = !(udid.size() > 7) || (udid[7] & 0x20);
 
         // Step 4: Determine address to assign
         std::uint8_t assignAddr = 0;
@@ -900,16 +898,29 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
         std::uint8_t addrType = (udid[0] >> 6);
         bool isFixedAddr = (addrType == 0x00);
 
-        if (isFixedAddr && originalAddrByte != 0xFF && originalAddr > 0x07 &&
+        // If the device's original address is in the ARP ignore list, keep
+        // it as-is instead of assigning a new dynamic address.
+        bool ignoreAddr = arpIgnoreAddresses.count(originalAddr) > 0;
+
+        // Whether we kept the device's original address instead of
+        // allocating a new dynamic one. Used to avoid advancing the dynamic
+        // ARP address pointer for a non-dynamic assignment.
+        bool keptOriginalAddr = false;
+
+        if ((isFixedAddr || !mctpSupported || ignoreAddr) &&
+            originalAddrByte != 0xFF && originalAddr > 0x07 &&
             originalAddr < 0x78 &&
             !isForbidden(std::format("{:02x}", originalAddr)))
         {
             // Device has a fixed/persistent address in UDID — keep it
             assignAddr = originalAddr;
+            keptOriginalAddr = true;
             debug("Device on bus {BUS} has fixed address 0x{ADDR} "
-                  "(UDID addr_type={TYPE}), assigning current address",
+                  "(UDID addr_type={TYPE}, mctp_supported={MCTP}, "
+                  "ignored={IGNORE}), assigning current address",
                   "BUS", busNum, "ADDR", std::format("{:02x}", assignAddr),
-                  "TYPE", addrType);
+                  "TYPE", addrType, "MCTP", mctpSupported, "IGNORE",
+                  ignoreAddr);
         }
         else
         {
@@ -1056,8 +1067,14 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             }
         }
 
-        // Update next address
-        setNextARPAddress(assignAddr + 1);
+        // Update next address only when a dynamic address was allocated.
+        // Keeping a device's original (fixed/ignored/non-MCTP) address must
+        // not advance the dynamic ARP pointer, otherwise the next round is
+        // seeded from an unrelated address.
+        if (!keptOriginalAddr)
+        {
+            setNextARPAddress(assignAddr + 1);
+        }
 
         // Add ARP-assigned address to whitelist so the scan phase can
         // rediscover the device if endpoint assignment fails here.

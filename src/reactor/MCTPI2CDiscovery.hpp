@@ -120,6 +120,11 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     // Forbidden I2C addresses that should never be assigned
     static const std::set<std::string> forbiddenAddresses;
 
+    // ARP addresses to ignore for dynamic assignment. If a device's
+    // original address is in this list, keep (assign back) its original
+    // address instead of assigning a new one.
+    std::set<std::uint8_t> arpIgnoreAddresses = {0x53};
+
     // Default whitelist: "12 13 1d 32"
     std::set<std::string> whitelist = {"12", "13", "1d", "32"};
 
