@@ -37,4 +37,5 @@ class MCTPPCIeDiscovery : public MCTPDiscovery
   private:
     const PCIeDiscoveryConfig& config;
     std::chrono::steady_clock::time_point lastResetTime{};
+    boost::asio::steady_timer ensureInterfaceTimer{bus->get_io_context()};
 };

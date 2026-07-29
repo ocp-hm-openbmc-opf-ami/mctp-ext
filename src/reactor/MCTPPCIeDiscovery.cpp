@@ -50,6 +50,17 @@ void MCTPPCIeDiscovery::resetDiscoveryState()
     lastResetTime = std::chrono::steady_clock::now();
     if (!ensureInterfaceReady("mctppci0", config.localEid, config.pcieNet))
     {
+        // Timer for delayed discovery after host events
+
         warning("PCIe discovery: failed to bring up mctppci0");
+        ensureInterfaceTimer.expires_after(std::chrono::seconds(10));
+        ensureInterfaceTimer.async_wait(
+            [this](const boost::system::error_code& ec) {
+                if (!ec)
+                {
+                    resetDiscoveryState();
+                }
+            });
+        return;
     }
 }

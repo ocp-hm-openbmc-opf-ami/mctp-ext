@@ -211,12 +211,6 @@ void MCTPI2CDiscovery::scanForNewDevices()
         {
             std::string hexAddr = std::format("{:02x}", addr);
 
-            // Only scan addresses in the whitelist
-            if (!isInWhitelist(hexAddr))
-            {
-                continue;
-            }
-
             // Skip addresses that ARP has moved devices away from
             if (staleArpAddresses.count(hexAddr))
             {
@@ -472,10 +466,17 @@ std::vector<std::uint8_t> MCTPI2CDiscovery::scanI2CRange(
         {
             std::string hexAddr = std::format("{:02x}", addr);
 
-            // Check if forbidden or already exists
+            // Check if forbidden or not in whitelist
             if (isForbidden(hexAddr))
             {
                 debug("Device at 0x{HEX_ADDR} is forbidden", "HEX_ADDR",
+                      hexAddr);
+                continue;
+            }
+
+            if (!isInWhitelist(hexAddr))
+            {
+                debug("Device at 0x{HEX_ADDR} is not in whitelist", "HEX_ADDR",
                       hexAddr);
                 continue;
             }
