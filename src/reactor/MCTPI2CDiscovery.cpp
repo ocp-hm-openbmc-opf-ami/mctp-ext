@@ -1362,7 +1362,7 @@ void MCTPI2CDiscovery::ensureMuxIdleMode()
 
     const std::string desiredValue = "-1"; // muxIdleModeConnect
     bool anyChanged = false;
-    std::set<std::string> processedRootBuses;
+    std::set<std::string> processedMuxDevices;
 
     try
     {
@@ -1384,17 +1384,18 @@ void MCTPI2CDiscovery::ensureMuxIdleMode()
                 continue;
             }
 
-            // Walk up the mux hierarchy to find the root bus
+            // Walk up the entire mux hierarchy from this leaf bus, setting
+            // idle_state on every mux device encountered at each level.
             std::string currentBus = busStr;
             while (true)
             {
-                fs::path muxDevLink = fs::path(
+                fs::path muxDevLink(
                     "/sys/bus/i2c/devices/i2c-" + currentBus + "/mux_device");
 
                 std::error_code ec;
                 if (!fs::exists(muxDevLink, ec) || ec)
                 {
-                    break; // currentBus is the root bus
+                    break; // reached the root bus
                 }
 
                 fs::path resolvedMux = fs::canonical(muxDevLink, ec);
@@ -1403,8 +1404,6 @@ void MCTPI2CDiscovery::ensureMuxIdleMode()
                     break;
                 }
 
-                // Extract parent bus from mux device name (e.g. "8-0070" ->
-                // "8")
                 std::string muxDevName = resolvedMux.filename().string();
                 auto dashPos = muxDevName.find('-');
                 if (dashPos == std::string::npos)
@@ -1412,70 +1411,46 @@ void MCTPI2CDiscovery::ensureMuxIdleMode()
                     break;
                 }
 
-                currentBus = muxDevName.substr(0, dashPos);
-            }
+                std::string parentBus = muxDevName.substr(0, dashPos);
 
-            std::string rootBus = currentBus;
-
-            // Skip if this root bus was already processed
-            if (!processedRootBuses.insert(rootBus).second)
-            {
-                continue;
-            }
-
-            // Only set idle_state on MUX devices directly under the root bus.
-            // MUX devices are named "{rootBus}-XXXX" and expose idle_state.
-            std::string prefix = rootBus + "-";
-            fs::path i2cDevicesPath("/sys/bus/i2c/devices");
-
-            std::error_code dirEc;
-            for (const auto& entry :
-                 fs::directory_iterator(i2cDevicesPath, dirEc))
-            {
-                std::string devName = entry.path().filename().string();
-                if (devName.substr(0, prefix.size()) != prefix)
+                // Set idle_state only once per mux device across all links
+                if (processedMuxDevices.insert(muxDevName).second)
                 {
-                    continue;
-                }
-
-                fs::path idlePath = entry.path() / "idle_state";
-                std::error_code ec;
-                if (!fs::exists(idlePath, ec) || ec)
-                {
-                    continue; // Not a mux device
-                }
-
-                std::string idlePathStr = idlePath.string();
-
-                // Read current value
-                std::string current;
-                {
-                    std::ifstream in(idlePath);
-                    if (in.good())
+                    fs::path idlePath = resolvedMux / "idle_state";
+                    if (fs::exists(idlePath, ec) && !ec)
                     {
-                        std::getline(in, current);
-                    }
-                }
-
-                // Only write if not already set to desired value
-                if (current != desiredValue)
-                {
-                    std::ofstream idleFile(idlePath);
-                    if (idleFile.good())
-                    {
-                        idleFile << desiredValue;
-                        idleFile.close();
-
-                        if (!idleFile.fail())
+                        std::string idlePathStr = idlePath.string();
+                        std::string current;
                         {
-                            info("Set mux idle_state to {MODE} for {PATH} "
-                                 "(was {PREV})",
-                                 "MODE", desiredValue, "PATH", idlePathStr,
-                                 "PREV", current);
-                            anyChanged = true;
+                            std::ifstream in(idlePath);
+                            if (in.good())
+                            {
+                                std::getline(in, current);
+                            }
+                        }
+
+                        if (current != desiredValue)
+                        {
+                            std::ofstream idleFile(idlePath);
+                            if (idleFile.good())
+                            {
+                                idleFile << desiredValue;
+                                idleFile.close();
+
+                                if (!idleFile.fail())
+                                {
+                                    info("Set mux idle_state to {MODE} for "
+                                         "{PATH} (was {PREV})",
+                                         "MODE", desiredValue, "PATH",
+                                         idlePathStr, "PREV", current);
+                                    anyChanged = true;
+                                }
+                            }
                         }
                     }
                 }
+
+                currentBus = parentBus;
             }
         }
 
