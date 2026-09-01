@@ -1,4 +1,9 @@
 option(
+    'tests',
+    type: 'feature',
+    description: 'Enable Unit tests')
+
+option(
     'build-mctp-i3c-daemon',
     type: 'feature',
     value: 'disabled',
