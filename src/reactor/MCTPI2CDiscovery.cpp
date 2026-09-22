@@ -53,10 +53,31 @@ MCTPI2CDiscovery::MCTPI2CDiscovery(
     const I2CDiscoveryConfig& cfg) :
     MCTPDiscovery(bus), config(cfg), i2cNet(cfg.i2cNet)
 {
-    if (!cfg.whitelist.empty())
+    if (!cfg.arpIgnoreList.empty())
     {
-        whitelist = cfg.whitelist;
+        arpIgnoreAddresses.clear();
+        for (const auto& hex : cfg.arpIgnoreList)
+        {
+            try
+            {
+                arpIgnoreAddresses.insert(static_cast<std::uint8_t>(
+                    std::stoul(hex, nullptr, 16)));
+            }
+            catch (const std::exception& e)
+            {
+                lg2::warning("Invalid ArpIgnoreList entry '{ENTRY}': {ERR}",
+                             "ENTRY", hex, "ERR", e.what());
+            }
+        }
     }
+
+    startHotplugTask(cfg.pollingInterval);
+}
+
+void MCTPI2CDiscovery::startHotplugTask(std::chrono::seconds interval)
+{
+    hotplugTask.emplace(bus->get_io_context(), interval,
+                        [this]() { run(); });
 }
 
 void MCTPI2CDiscovery::run()
@@ -105,10 +126,6 @@ void MCTPI2CDiscovery::run()
         debug("Scanning configured I2C devices...");
         scanConfiguredDevices();
     }
-
-    // Phase 3: Perform hotplug discovery for remaining devices
-    debug("Performing I2C hotplug discovery...");
-    scanForNewDevices();
 
     std::filesystem::remove(busyFilePath);
     debug("=== I2C Discovery Complete ===");
@@ -169,105 +186,29 @@ void MCTPI2CDiscovery::validateExistingRoutes()
             debug("Address 0x{HEX_ADDR} responds on bus {BUS_NUM} (active)",
                   "HEX_ADDR", std::format("{:02x}", neighbor.physAddr),
                   "BUS_NUM", busNum);
-        }
-    }
-}
 
-void MCTPI2CDiscovery::scanForNewDevices()
-{
-    debug("=== Phase 3: Scanning I2C Links (Buses >= {MIN_BUS})", "MIN_BUS",
-          minBusNum);
-
-    std::vector<std::string> devices = getLinksViaNetlink("mctpi2c");
-    if (devices.empty())
-    {
-        debug("No MCTP links found");
-        return;
-    }
-
-    for (const auto& device : devices)
-    {
-        // Extract bus number
-        std::string busStr = device.substr(7);
-        std::uint8_t busNum = static_cast<std::uint8_t>(std::stoi(busStr));
-
-        // Always ensure interface is up and local EID is configured,
-        // even for buses below minBusNum — child MUX buses share the
-        // same physical interface and need it ready.
-        if (!ensureInterfaceReady(device, config.localEid, i2cNet,
-                                  i2cDefaultMtu))
-        {
-            continue;
-        }
-
-        debug("Scanning bus {BUS_NUM} ({DEVICE})", "BUS_NUM", busNum, "DEVICE",
-              device);
-
-        // Scan I2C addresses via ioctl
-        std::vector<std::uint8_t> detectedAddresses =
-            scanI2CRange(busNum, 0x08, 0x77);
-
-        for (std::uint8_t addr : detectedAddresses)
-        {
-            std::string hexAddr = std::format("{:02x}", addr);
-
-            // Skip addresses that ARP has moved devices away from
-            if (staleArpAddresses.count(hexAddr))
+            // Check if endpoint needs syncing
+            std::string epPath = std::string(mctp::dbus::basePath) +
+                                 "/networks/" + std::to_string(i2cNet) +
+                                 "/endpoints/" + std::to_string(neighbor.eid);
+            try
             {
-                debug("Skipping stale ARP address 0x{HEX_ADDR} on bus "
-                      "{BUS_NUM} (device was moved by ARP)",
-                      "HEX_ADDR", hexAddr, "BUS_NUM", busNum);
-                continue;
+                auto method = bus->new_method_call(
+                    mctp::dbus::service.data(), epPath.c_str(),
+                    "org.freedesktop.DBus.Properties", "GetAll");
+                bus->call(method);
             }
-
-            // Skip addresses that ARP already assigned and handled this cycle
-            if (arpAssignedThisCycle.count(hexAddr))
+            catch (const std::exception&)
             {
-                debug("Skipping 0x{HEX_ADDR} on bus {BUS_NUM} "
-                      "(already handled by ARP this cycle)",
-                      "HEX_ADDR", hexAddr, "BUS_NUM", busNum);
-                continue;
+                // Endpoint doesn't exist, sync it
+                if (assignEndpointStatic(
+                        neighbor.device, neighbor.eid,
+                        std::format("{:02x}", neighbor.physAddr)))
+                {
+                    debug("Synced EID {EID} via AssignEndpointStatic", "EID",
+                          neighbor.eid);
+                }
             }
-
-            // Skip addresses that are configured with a static EID
-            if (isConfiguredStaticDevice(busNum, hexAddr))
-            {
-                debug("Device 0x{HEX_ADDR} on bus {BUS_NUM} is configured "
-                      "with static EID, skipping dynamic assignment",
-                      "HEX_ADDR", hexAddr, "BUS_NUM", busNum);
-                continue;
-            }
-
-            if (neighborExistsViaNetlink(hexAddr, device))
-            {
-                debug("Device 0x{HEX_ADDR} already exists in MCTP neighbors",
-                      "HEX_ADDR", hexAddr);
-                continue;
-            }
-
-            debug("New device at 0x{HEX_ADDR} on {DEVICE}. Assigning...",
-                  "HEX_ADDR", hexAddr, "DEVICE", device);
-
-#if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-            manageDeviceViaReactor(busNum, addr, device);
-#else
-            // Call parent class assignEndpoint with hex address as vector
-            std::vector<std::uint8_t> addrVector;
-            addrVector.push_back(std::stoi(hexAddr, nullptr, 16));
-            auto response = assignEndpoint(device, addrVector);
-
-            if (response.eid != 0)
-            {
-                debug(
-                    "Successfully assigned endpoint for 0x{HEX_ADDR}: EID={EID}",
-                    "HEX_ADDR", hexAddr, "EID", static_cast<int>(response.eid));
-            }
-            else
-            {
-                warning("Failed to assign endpoint for 0x{HEX_ADDR}",
-                        "HEX_ADDR", hexAddr);
-            }
-#endif
         }
     }
 }
@@ -301,8 +242,7 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
             (busNum == 0) ? "mctpmbox0" : "mctpi2c" + std::to_string(busNum);
 
         // Ensure interface is up and local EID is configured
-        if (!ensureInterfaceReady(ifaceName, config.localEid, i2cNet,
-                                  i2cDefaultMtu))
+        if (!ensureInterfaceReady(ifaceName, config.ownEID, i2cNet, config.mtu))
         {
             continue;
         }
@@ -399,108 +339,9 @@ void MCTPI2CDiscovery::scanConfiguredDevices()
     }
 }
 
-bool MCTPI2CDiscovery::isConfiguredStaticDevice(
-    std::uint8_t busNum, const std::string& hexAddr) const
-{
-    for (const auto& device : config.devices)
-    {
-        if (device.staticEndpointId.empty())
-        {
-            continue;
-        }
-
-        try
-        {
-            std::uint8_t cfgBus =
-                static_cast<std::uint8_t>(std::stoul(device.bus, nullptr, 0));
-            std::uint8_t cfgAddr = static_cast<std::uint8_t>(
-                std::stoul(device.address, nullptr, 0));
-            std::string cfgHexAddr = std::format("{:02x}", cfgAddr);
-
-            if (cfgBus == busNum && cfgHexAddr == hexAddr)
-            {
-                return true;
-            }
-        }
-        catch (const std::exception&)
-        {
-            // Invalid config entry, skip
-        }
-    }
-    return false;
-}
-
 bool MCTPI2CDiscovery::isForbidden(const std::string& hexAddr) const
 {
     return forbiddenAddresses.find(hexAddr) != forbiddenAddresses.end();
-}
-
-bool MCTPI2CDiscovery::isInWhitelist(const std::string& hexAddr) const
-{
-    if (whitelist.empty())
-    {
-        return true; // Empty whitelist means allow all
-    }
-    return whitelist.find(hexAddr) != whitelist.end();
-}
-
-std::vector<std::uint8_t> MCTPI2CDiscovery::scanI2CRange(
-    std::uint8_t busNum, std::uint8_t startAddr, std::uint8_t endAddr)
-{
-    std::vector<std::uint8_t> foundAddresses;
-
-    try
-    {
-        std::string devPath = "/dev/i2c-" + std::to_string(busNum);
-        int fd = open(devPath.c_str(), O_RDWR);
-
-        if (fd < 0)
-        {
-            warning("Failed to open I2C device {DEVICE}: {ERROR}", "DEVICE",
-                    devPath, "ERROR", strerror(errno));
-            return foundAddresses;
-        }
-
-        // Scan range of addresses
-        for (std::uint8_t addr = startAddr; addr <= endAddr; ++addr)
-        {
-            std::string hexAddr = std::format("{:02x}", addr);
-
-            // Check if forbidden or not in whitelist
-            if (isForbidden(hexAddr))
-            {
-                debug("Device at 0x{HEX_ADDR} is forbidden", "HEX_ADDR",
-                      hexAddr);
-                continue;
-            }
-
-            if (!isInWhitelist(hexAddr))
-            {
-                debug("Device at 0x{HEX_ADDR} is not in whitelist", "HEX_ADDR",
-                      hexAddr);
-                continue;
-            }
-
-            // Use enhanced probe method
-            if (probeI2CAddress(fd, addr))
-            {
-                foundAddresses.push_back(addr);
-                debug("Found I2C device at 0x{ADDR} on bus {BUS}", "ADDR",
-                      std::format("{:02x}", addr), "BUS", busNum);
-            }
-        }
-
-        close(fd);
-    }
-    catch (const std::exception& e)
-    {
-        warning(
-            "Exception scanning I2C range 0x{START}-0x{END} on bus {BUS}: {EXCEPTION}",
-            "START", std::format("{:02x}", startAddr), "END",
-            std::format("{:02x}", endAddr), "BUS", busNum, "EXCEPTION", e);
-    }
-
-    return foundAddresses;
 }
 
 std::vector<MCTPNeighbor> MCTPI2CDiscovery::getNeighborsViaNetlink()
@@ -747,6 +588,17 @@ void MCTPI2CDiscovery::performARPAssignment()
         {
             debug("Skipping ARP on root bus {BUS} ({DEV}): has MUX children",
                   "BUS", busNum, "DEV", device);
+            continue;
+        }
+
+        // Bring the link up and configure its local EID/net before ARPing;
+        // AssignEndpoint() below relies on the interface already being
+        // registered with the correct own EID, otherwise mctpd assigns
+        // against an unconfigured link.
+        if (!ensureInterfaceReady(device, config.ownEID, i2cNet, config.mtu))
+        {
+            warning("Skipping ARP on bus {BUS} ({DEV}): interface not ready",
+                    "BUS", busNum, "DEV", device);
             continue;
         }
 
@@ -1077,15 +929,7 @@ bool MCTPI2CDiscovery::performARPOnBus(std::uint8_t busNum,
             setNextARPAddress(assignAddr + 1);
         }
 
-        // Add ARP-assigned address to whitelist so the scan phase can
-        // rediscover the device if endpoint assignment fails here.
         std::string hexAddr = std::format("{:02x}", assignAddr);
-        if (!isInWhitelist(hexAddr))
-        {
-            whitelist.insert(hexAddr);
-            debug("Added ARP-assigned address 0x{ADDR} to whitelist", "ADDR",
-                  hexAddr);
-        }
 
         // Assign endpoint
         std::vector<std::uint8_t> addrVector = {assignAddr};
@@ -1465,6 +1309,43 @@ void MCTPI2CDiscovery::ensureMuxIdleMode()
     }
 }
 
+bool MCTPI2CDiscovery::isMuxParentBus(std::uint8_t busNum) const
+{
+    namespace fs = std::filesystem;
+
+    try
+    {
+        fs::path busPath = "/sys/bus/i2c/devices/i2c-" + std::to_string(busNum);
+        if (!fs::exists(busPath))
+        {
+            return false;
+        }
+
+        // A MUX parent bus will have child directories named "i2c-N"
+        // (the virtual buses created by the mux driver)
+        for (const auto& entry : fs::directory_iterator(busPath))
+        {
+            std::string name = entry.path().filename().string();
+            if (name.starts_with("i2c-") && name.size() > 4)
+            {
+                // Verify the suffix is purely numeric (e.g. "i2c-16")
+                std::string suffix = name.substr(4);
+                if (std::all_of(suffix.begin(), suffix.end(), ::isdigit))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    catch (const std::exception& e)
+    {
+        warning("Exception checking MUX parent bus {BUS}: {EXCEPTION}", "BUS",
+                busNum, "EXCEPTION", e);
+    }
+
+    return false;
+}
+
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
 void MCTPI2CDiscovery::manageDeviceViaReactor(
     std::uint8_t busNum, std::uint8_t addr, const std::string& ifaceName)
@@ -1496,3 +1377,4 @@ void MCTPI2CDiscovery::manageDeviceViaReactor(
     }
 }
 #endif
+

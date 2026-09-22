@@ -15,6 +15,18 @@ PHOSPHOR_LOG2_USING;
 
 using namespace std::chrono_literals;
 
+MCTPRoutingTableDiscovery::MCTPRoutingTableDiscovery(
+    const std::shared_ptr<sdbusplus::asio::connection>& bus,
+    const RoutingTableConfig& config) : MCTPDiscovery(bus), config(config)
+{
+    startTask(config.pollingInterval);
+}
+
+void MCTPRoutingTableDiscovery::startTask(std::chrono::seconds interval)
+{
+    task.emplace(bus->get_io_context(), interval, [this]() { run(); });
+}
+
 void MCTPRoutingTableDiscovery::run()
 {
     auto now = std::chrono::steady_clock::now();
