@@ -2,6 +2,7 @@
 
 #include "DBusAssociationServer.hpp"
 #include "HostStateMonitor.hpp"
+#include "MCTPConfigMonitor.hpp"
 #include "MCTPConstants.hpp"
 #include "MCTPEndpoint.hpp"
 #include "MCTPI2CDiscovery.hpp"
@@ -24,6 +25,9 @@
 #include <sdbusplus/message.hpp>
 #include <sdbusplus/message/native_types.hpp>
 
+#include <cstdint>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -117,31 +121,33 @@ static void removeInventory(const std::shared_ptr<MCTPReactor>& reactor,
     }
 }
 
-[[maybe_unused]] static void manageMCTPEntity(
-    const std::shared_ptr<sdbusplus::asio::connection>& connection,
-    const std::shared_ptr<MCTPReactor>& reactor, ManagedObjectType& entities)
-{
-    for (const auto& [path, config] : entities)
-    {
-        try
-        {
-            reactor->manageMCTPDevice(path,
-                                      deviceFromConfig(connection, config));
-        }
-        catch (const std::logic_error& e)
-        {
-            error(
-                "Addition of inventory at '{INVENTORY_PATH}' caused an invalid program state: {EXCEPTION}",
-                "INVENTORY_PATH", path, "EXCEPTION", e);
-        }
-        catch (const std::system_error& e)
-        {
-            error(
-                "Failed to manage device described by inventory at '{INVENTORY_PATH}: {EXCEPTION}'",
-                "INVENTORY_PATH", path, "EXCEPTION", e);
-        }
-    }
-}
+// static void manageMCTPEntity(
+//     const std::shared_ptr<sdbusplus::asio::connection>& connection,
+//     const std::shared_ptr<MCTPReactor>& reactor, ManagedObjectType& entities)
+// {
+//     for (const auto& [path, config] : entities)
+//     {
+//         try
+//         {
+//             reactor->manageMCTPDevice(path,
+//                                       deviceFromConfig(connection, config));
+//         }
+//         catch (const std::logic_error& e)
+//         {
+//             error(
+//                 "Addition of inventory at '{INVENTORY_PATH}' caused an
+//                 invalid program state: {EXCEPTION}", "INVENTORY_PATH", path,
+//                 "EXCEPTION", e);
+//         }
+//         catch (const std::system_error& e)
+//         {
+//             error(
+//                 "Failed to manage device described by inventory at
+//                 '{INVENTORY_PATH}: {EXCEPTION}'", "INVENTORY_PATH", path,
+//                 "EXCEPTION", e);
+//         }
+//     }
+// }
 
 static void exitReactor(boost::asio::io_context* io, sdbusplus::message_t& msg)
 {
@@ -157,137 +163,31 @@ try
     boost::asio::io_context io;
     auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
 
-    // Load config: try Entity Manager D-Bus first, then JSON file, then TOML
-    MCTPReactorConfig config;
-    if (std::filesystem::exists(MCTPD_JSON_FILE_DEFAULT))
-    {
-        config = MCTPReactorConfig::fromJsonFile();
-    }
-    else
-    {
-        config = MCTPReactorConfig::fromTomlFile();
-    }
-
     DBusAssociationServer associationServer(systemBus);
     auto reactor = std::make_shared<MCTPReactor>(associationServer);
+    reactor->buildDiscovery(io, systemBus);
 
-    // Create discovery modules with config
-    std::shared_ptr<MCTPI2CDiscovery> i2cDiscovery;
-    if (config.i2c.enabled)
-    {
-        config.i2c.localEid = config.localEid;
-        i2cDiscovery =
-            std::make_shared<MCTPI2CDiscovery>(systemBus, config.i2c);
-#if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-        i2cDiscovery->setReactor(reactor);
-#endif
-    }
-    std::shared_ptr<MCTPPCIeDiscovery> pcieDiscovery;
-    if (config.pcie.enabled)
-    {
-        config.pcie.localEid = config.localEid;
-        pcieDiscovery =
-            std::make_shared<MCTPPCIeDiscovery>(systemBus, config.pcie);
-    }
-    std::shared_ptr<MCTPUSBDiscovery> usbDiscovery;
-    if (config.usb.enabled)
-    {
-        config.usb.localEid = config.localEid;
-        usbDiscovery =
-            std::make_shared<MCTPUSBDiscovery>(systemBus, config.usb);
-#if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
-        usbDiscovery->setReactor(reactor);
-#endif
-    }
-    std::shared_ptr<MCTPI3CDiscovery> i3cDiscovery;
-    if (config.i3c.enabled)
-    {
-        i3cDiscovery =
-            std::make_shared<MCTPI3CDiscovery>(systemBus, config.i3c);
-    }
-    auto routingTableDiscovery =
-        std::make_shared<MCTPRoutingTableDiscovery>(systemBus);
-
-    // Periodic tasks
-    PeriodicTask reactorTick(io, config.reactorTickPeriod, [reactor]() {
-        reactor->tick();
-    });
-
-    // Create discovery tasks only if enabled in config
-    std::vector<PeriodicTask*> discoveryTasks;
-
-    std::optional<PeriodicTask> i2cHotplugTask;
-    if (config.i2c.enabled)
-    {
-        i2cHotplugTask.emplace(io, config.i2c.pollingInterval,
-                               [i2cDiscovery]() { i2cDiscovery->run(); });
-        discoveryTasks.push_back(&i2cHotplugTask.value());
-    }
-
-    std::optional<PeriodicTask> pcieTask;
-    if (config.pcie.enabled && config.pcie.pcieRole == "bus-owner")
-    {
-        pcieTask.emplace(io, config.pcie.pollingInterval,
-                         [pcieDiscovery]() { pcieDiscovery->run(); });
-        discoveryTasks.push_back(&pcieTask.value());
-    }
-
-    std::optional<PeriodicTask> usbTask;
-    if (config.usb.enabled)
-    {
-        usbTask.emplace(io, config.usb.pollingInterval,
-                        [usbDiscovery]() { usbDiscovery->run(); });
-        discoveryTasks.push_back(&usbTask.value());
-    }
-
-    // USB hotplug event handling - run frequently to process device hotplug
-    // events
-    std::optional<PeriodicTask> usbHotplugTask;
-    if (config.usb.enabled && config.usb.hotplugEnabled)
-    {
-        usbHotplugTask.emplace(
-            io, std::chrono::milliseconds(100),
-            [usbDiscovery]() { usbDiscovery->handleLibusbEvents(); });
-    }
-
-    std::optional<PeriodicTask> routingTableTask;
-    // Routing table discovery is always created (no enabled flag)
-    routingTableTask.emplace(
-        io, config.routingTable.pollingInterval,
-        [routingTableDiscovery]() { routingTableDiscovery->run(); });
-    discoveryTasks.push_back(&routingTableTask.value());
-
-    // Each discovery module auto-registered itself with MCTPDiscovery on
-    // construction. Host-state events fan out to every registered instance
-    // through the static dispatchers; subclasses handle the events via
-    // their onHostOn/onHostOff/onPlatformReset overrides.
-    HostStateMonitor hostMonitor(
-        systemBus, discoveryTasks, []() { MCTPDiscovery::dispatchHostOff(); },
-        []() { MCTPDiscovery::dispatchHostOn(); },
-        []() {
-            info("Handling platform reset: dispatching to discovery modules");
-            MCTPDiscovery::dispatchPlatformReset();
-        });
+    info("Reactor initialized with {HOST_COUNT} host monitor(s)",
+         "HOST_COUNT", MCTPDiscovery::hostMonitorCount());
 
     // Setup signal handler for graceful shutdown on SIGTERM
     boost::asio::signal_set signals(io, SIGTERM, SIGINT);
-    signals.async_wait([&io, &config, &usbDiscovery](
-                           const boost::system::error_code& ec, int signum) {
-        if (!ec)
-        {
-            info("Received signal {SIGNAL}, shutting down gracefully", "SIGNAL",
-                 signum);
-            if (config.usb.enabled && config.usb.hotplugEnabled)
+    signals.async_wait(
+        [&io, reactor](const boost::system::error_code& ec, int signum) {
+            if (!ec)
             {
-                // Close USB handles and shutdown hotplug
-                info("Closing USB device handles");
-                usbDiscovery->shutdownHotplug();
+                info("Received signal {SIGNAL}, shutting down gracefully",
+                     "SIGNAL", signum);
+                if (reactor->config.usb.enabled &&
+                    reactor->config.usb.hotplugEnabled &&
+                    reactor->discovery.usbDiscovery)
+                {
+                    info("Closing USB device handles");
+                    reactor->discovery.usbDiscovery->shutdownHotplug();
+                }
+                io.stop();
             }
-
-            // Stop the io_context to exit the event loop
-            io.stop();
-        }
-    });
+        });
 
     using namespace sdbusplus::bus::match;
 
@@ -312,7 +212,6 @@ try
 
     const std::string interfacesRemovedMatchSpec =
         rules::sender(mctp::dbus::entityManagerService.data()) +
-        // Trailing slash on path: Listen for signals on the inventory subtree
         rules::interfacesRemovedAtPath(mctp::dbus::inventoryBasePath.data());
 
     auto interfacesRemovedMatch = sdbusplus::bus::match_t(
@@ -321,22 +220,37 @@ try
 
     const std::string interfacesAddedMatchSpec =
         rules::sender(mctp::dbus::entityManagerService.data()) +
-        // Trailing slash on path: Listen for signals on the inventory subtree
         rules::interfacesAddedAtPath(mctp::dbus::inventoryBasePath.data());
 
     auto interfacesAddedMatch = sdbusplus::bus::match_t(
         static_cast<sdbusplus::bus_t&>(*systemBus), interfacesAddedMatchSpec,
         std::bind_front(addInventory, systemBus, reactor));
 
-    // systemBus->request_name(mctp::dbus::reactorService.data());
-
-    // boost::asio::post(io, [reactor, systemBus]() {
-    //     auto gsc = std::make_shared<GetSensorConfiguration>(
-    //         systemBus, std::bind_front(manageMCTPEntity, systemBus,
-    //         reactor));
-    //     std::vector<std::string_view> types{"MCTPI2CTarget",
-    //     "MCTPI3CTarget"}; gsc->getConfiguration(types);
-    // });
+    // Live reload: rebuild the discovery stack when Entity Manager publishes
+    // updated MCTP configuration.
+    MCTPConfigMonitor configMonitor(
+        systemBus, io, [&io, systemBus, reactor]() {
+            boost::asio::post(io, [systemBus, reactor, &io]() {
+                info("Live-reloading MCTP reactor configuration");
+                if (reactor->config.usb.enabled &&
+                    reactor->config.usb.hotplugEnabled &&
+                    reactor->discovery.usbDiscovery)
+                {
+                    reactor->discovery.usbDiscovery->shutdownHotplug();
+                }
+                reactor->resetDiscovery();
+                try
+                {
+                    reactor->buildDiscovery(io, systemBus);
+                    info("MCTP reactor configuration reloaded");
+                }
+                catch (const std::exception& e)
+                {
+                    error("Failed to rebuild discovery stack: {ERR}", "ERR",
+                          e.what());
+                }
+            });
+        });
 
     // Monitor /var/run/mctp_trace_on for runtime log level changes
     ReactorDebugMonitor debugMonitor(io);

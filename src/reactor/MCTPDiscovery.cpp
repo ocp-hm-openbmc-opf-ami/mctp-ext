@@ -1,6 +1,9 @@
 
+#include "config.h"
+
 #include "MCTPDiscovery.hpp"
 
+#include "HostStateMonitor.hpp"
 #include "MCTPConstants.hpp"
 
 #include <errno.h>
@@ -16,6 +19,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <boost/asio/io_context.hpp>
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/asio/connection.hpp>
 
@@ -42,6 +46,15 @@ std::vector<MCTPDiscovery*>& registry()
     static std::vector<MCTPDiscovery*> v;
     return v;
 }
+
+// Process-wide host power state monitor(s), created by
+// MCTPDiscovery::initHostMonitoring() and torn down by
+// MCTPDiscovery::resetHostMonitoring().
+std::vector<std::unique_ptr<HostStateMonitor>>& hostMonitors()
+{
+    static std::vector<std::unique_ptr<HostStateMonitor>> v;
+    return v;
+}
 } // namespace
 
 MCTPDiscovery::MCTPDiscovery(
@@ -59,7 +72,7 @@ MCTPDiscovery::~MCTPDiscovery()
     v.erase(std::remove(v.begin(), v.end(), this), v.end());
 }
 
-void MCTPDiscovery::dispatchHostOn()
+void MCTPDiscovery::dispatchHostOn(uint8_t hostIndex)
 {
     std::vector<MCTPDiscovery*> snapshot;
     {
@@ -68,11 +81,11 @@ void MCTPDiscovery::dispatchHostOn()
     }
     for (auto* d : snapshot)
     {
-        d->onHostOn();
+        d->onHostOn(hostIndex);
     }
 }
 
-void MCTPDiscovery::dispatchHostOff()
+void MCTPDiscovery::dispatchHostOff(uint8_t hostIndex)
 {
     std::vector<MCTPDiscovery*> snapshot;
     {
@@ -81,7 +94,7 @@ void MCTPDiscovery::dispatchHostOff()
     }
     for (auto* d : snapshot)
     {
-        d->onHostOff();
+        d->onHostOff(hostIndex);
     }
 }
 
@@ -96,6 +109,118 @@ void MCTPDiscovery::dispatchPlatformReset()
     {
         d->onPlatformReset();
     }
+}
+
+void MCTPDiscovery::initHostMonitoring(
+    const std::shared_ptr<sdbusplus::asio::connection>& connection)
+{
+#ifdef MULTI_HOST_MODE_SUPPORT
+    // Multi-host mode: create independent monitors for Host1 (power1) and
+    // Host2 (power2).
+    // NOTE: the MCTPDiscovery registry (I2C/USB/I3C/PCIe onHostOn/onHostOff)
+    // is shared across both host monitors. dispatchHostOn()/dispatchHostOff()
+    // are global (host-agnostic), so calling them once per host would run
+    // onHostOn()/onHostOff() twice whenever both hosts transition around
+    // the same time, causing duplicate I2C/USB discovery resets and
+    // duplicate discovery cycles. Gate the global dispatch so it only
+    // fires on the actual edge: first host powering on, or last host
+    // powering off.
+    info("Multi-host mode enabled: creating monitors for Host1, Host2");
+    for (uint8_t hostIndex = 1; hostIndex < 3; ++hostIndex)
+    {
+        hostMonitors().push_back(std::make_unique<HostStateMonitor>(
+            connection,
+            [](uint8_t idx) {
+                info("Host{HOST} powered off", "HOST", idx);
+                if (!MCTPDiscovery::isAnyHostOn())
+                {
+                    info("All hosts powered off: pausing shared discovery "
+                         "tasks");
+                    MCTPDiscovery::dispatchHostOff(idx);
+                }
+                else
+                {
+                    debug("Host{HOST} off, but other host(s) still on: "
+                          "skipping duplicate discovery dispatch",
+                          "HOST", idx);
+                }
+            },
+            [](uint8_t idx) {
+                info("Host{HOST} powered on", "HOST", idx);
+                auto states = MCTPDiscovery::getHostStates();
+                size_t onCount =
+                    std::count(states.begin(), states.end(), true);
+                if (onCount <= 1)
+                {
+                    info("First host powered on: resuming shared discovery "
+                         "tasks");
+                    MCTPDiscovery::dispatchHostOn(idx);
+                }
+                else
+                {
+                    debug("Host{HOST} on, but another host was already on: "
+                          "skipping duplicate discovery dispatch",
+                          "HOST", idx);
+                }
+            },
+            []() {
+                info("eSPI platform reset: triggering cleanup");
+                MCTPDiscovery::dispatchPlatformReset();
+            },
+            hostIndex));
+    }
+#else
+    info("Single-host mode: creating monitor for Host0 only");
+    hostMonitors().push_back(std::make_unique<HostStateMonitor>(
+        connection,
+        [](uint8_t idx) {
+            info("Host{HOST} powered off: pausing discovery tasks", "HOST",
+                 idx);
+            MCTPDiscovery::dispatchHostOff(idx);
+        },
+        [](uint8_t idx) {
+            info("Host{HOST} powered on: resuming discovery tasks", "HOST",
+                 idx);
+            MCTPDiscovery::dispatchHostOn(idx);
+        },
+        []() {
+            info("eSPI platform reset: triggering cleanup");
+            MCTPDiscovery::dispatchPlatformReset();
+        }));
+#endif
+}
+
+void MCTPDiscovery::resetHostMonitoring()
+{
+    hostMonitors().clear();
+}
+
+bool MCTPDiscovery::isAnyHostOn()
+{
+    for (const auto& monitor : hostMonitors())
+    {
+        if (monitor->isHostOn())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<bool> MCTPDiscovery::getHostStates()
+{
+    std::vector<bool> states;
+    states.reserve(hostMonitors().size());
+    for (const auto& monitor : hostMonitors())
+    {
+        states.push_back(monitor->isHostOn());
+    }
+    return states;
+}
+
+std::size_t MCTPDiscovery::hostMonitorCount()
+{
+    return hostMonitors().size();
 }
 
 MCTPDiscovery::AssignEndpointResponse MCTPDiscovery::assignEndpoint(
@@ -206,6 +331,7 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
     int ifIndex = static_cast<int>(ifIdx);
     bool isUp = false;
     bool eidMatched = false;
+    int currentNet = -1;
     std::vector<uint8_t> otherEids;
 
     // Single netlink socket for all operations
@@ -247,6 +373,42 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
                     auto* ifm =
                         reinterpret_cast<struct ifinfomsg*>(NLMSG_DATA(nlh));
                     isUp = (ifm->ifi_flags & IFF_UP) != 0;
+
+                    // Parse IFLA_AF_SPEC { AF_MCTP { IFLA_MCTP_NET } } to
+                    // learn the interface's current MCTP network, so we can
+                    // detect (and correct) a stale net below.
+                    int attrLen = IFLA_PAYLOAD(nlh);
+                    for (auto* rta = IFLA_RTA(ifm); RTA_OK(rta, attrLen);
+                         rta = RTA_NEXT(rta, attrLen))
+                    {
+                        if ((rta->rta_type & ~NLA_F_NESTED) != IFLA_AF_SPEC)
+                        {
+                            continue;
+                        }
+                        int afLen = RTA_PAYLOAD(rta);
+                        for (auto* af =
+                                 reinterpret_cast<struct rtattr*>(RTA_DATA(rta));
+                             RTA_OK(af, afLen); af = RTA_NEXT(af, afLen))
+                        {
+                            if ((af->rta_type & ~NLA_F_NESTED) != AF_MCTP)
+                            {
+                                continue;
+                            }
+                            int mLen = RTA_PAYLOAD(af);
+                            for (auto* m = reinterpret_cast<struct rtattr*>(
+                                     RTA_DATA(af));
+                                 RTA_OK(m, mLen); m = RTA_NEXT(m, mLen))
+                            {
+                                if (m->rta_type == IFLA_MCTP_NET &&
+                                    RTA_PAYLOAD(m) >= sizeof(uint32_t))
+                                {
+                                    uint32_t n = 0;
+                                    memcpy(&n, RTA_DATA(m), sizeof(n));
+                                    currentNet = static_cast<int>(n);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -323,6 +485,24 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         }
     }
 
+    // If the interface is on the wrong MCTP net, the matching local EID is
+    // still homed on the old net (the local route was created when the link
+    // had the previous net). Force a full reconfigure: drop the stale EID
+    // here so Step 4 can change the net and Step 5 re-adds the EID on the
+    // correct net. Without this, an interface pre-created with the right EID
+    // but wrong net (e.g. mctpi3c5 left on net 8 instead of 10) would be
+    // skipped by the "already up with correct EID" early-return below.
+    const bool netMatched = (currentNet == net);
+    if (eidMatched && !netMatched)
+    {
+        info("ensureInterfaceReady: {INTF} on net {CUR} but expected {WANT}; "
+             "re-homing EID {EID}",
+             "INTF", interfaceName, "CUR", currentNet, "WANT", net, "EID",
+             lg2::hex, eid);
+        otherEids.push_back(eid);
+        eidMatched = false;
+    }
+
     // Remove other local EIDs that don't match the expected one
     for (uint8_t other : otherEids)
     {
@@ -362,8 +542,9 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         }
     }
 
-    // Already up with correct EID — nothing to do
-    if (isUp && eidMatched)
+    // Already up with correct EID — skip Steps 3-5 (still apply MTU below)
+    bool needsConfigure = !(isUp && eidMatched);
+    if (!needsConfigure)
     {
         debug("ensureInterfaceReady: {INTF} is up with EID {EID}", "INTF",
               interfaceName, "EID", lg2::hex, eid);
@@ -371,12 +552,8 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         return true;
     }
 
-    info("ensureInterfaceReady: {INTF} not ready (up={UP}, eidMatch={MATCH}), "
-         "configuring",
-         "INTF", interfaceName, "UP", isUp, "MATCH", eidMatched);
-
     // Step 3: Bring interface up (RTM_NEWLINK with IFF_UP)
-    if (!isUp)
+    if (needsConfigure && !isUp)
     {
         struct
         {
@@ -518,7 +695,7 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
             struct nlmsghdr nh;
             struct ifinfomsg ifmsg;
             struct rtattr rta;
-            uint32_t data;
+            uint32_t mtuVal;
         } req = {};
 
         req.nh.nlmsg_type = RTM_NEWLINK;
@@ -526,17 +703,23 @@ bool MCTPDiscovery::ensureInterfaceReady(const std::string& interfaceName,
         req.ifmsg.ifi_index = ifIndex;
         req.rta.rta_type = IFLA_MTU;
         req.rta.rta_len = RTA_LENGTH(sizeof(mtu));
-        memcpy(&req.data, &mtu, sizeof(mtu));
+        req.mtuVal = mtu;
         req.nh.nlmsg_len =
             NLMSG_LENGTH(sizeof(req.ifmsg)) + RTA_SPACE(sizeof(mtu));
 
-        if (sendto(sock, &req, req.nh.nlmsg_len, 0,
-                   reinterpret_cast<struct sockaddr*>(&nlAddr),
-                   sizeof(nlAddr)) < 0)
+        int ret = sendto(sock, &req, req.nh.nlmsg_len, 0,
+                         reinterpret_cast<struct sockaddr*>(&nlAddr),
+                         sizeof(nlAddr));
+        if (ret < 0)
         {
-            warning(
-                "ensureInterfaceReady: send RTM_NEWLINK (mtu) failed for {INTF}",
-                "INTF", interfaceName);
+            warning("ensureInterfaceReady: send RTM_NEWLINK (mtu) failed for "
+                    "{INTF} mtu={MTU}: {ERR}",
+                    "INTF", interfaceName, "MTU", mtu, "ERR", strerror(errno));
+        }
+        else
+        {
+            info("ensureInterfaceReady: set MTU {MTU} on {INTF}", "MTU", mtu,
+                 "INTF", interfaceName);
         }
     }
 

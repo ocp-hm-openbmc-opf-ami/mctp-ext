@@ -2,12 +2,15 @@
 
 #include "MCTPConstants.hpp"
 #include "MCTPDiscovery.hpp"
+#include "MCTPReactorConfig.hpp"
+#include "PeriodicTask.hpp"
 #include "Utils.hpp"
 
 #include <sdbusplus/asio/connection.hpp>
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 /**
@@ -20,10 +23,9 @@
 class MCTPRoutingTableDiscovery : public MCTPDiscovery
 {
   public:
-    explicit MCTPRoutingTableDiscovery(
-        const std::shared_ptr<sdbusplus::asio::connection>& bus) :
-        MCTPDiscovery(bus)
-    {}
+    MCTPRoutingTableDiscovery(
+        const std::shared_ptr<sdbusplus::asio::connection>& bus,
+        const RoutingTableConfig& config);
     ~MCTPRoutingTableDiscovery() override = default;
 
     void run() override;
@@ -32,19 +34,40 @@ class MCTPRoutingTableDiscovery : public MCTPDiscovery
         return "RoutingTable";
     }
 
-    /// Re-trigger discovery and refresh routing table when host comes up.
-    void onHostOn() override
+    /// Re-trigger discovery, refresh the routing table, and resume the
+    /// periodic task when host comes up.
+    void onHostOn(uint8_t /*hostIndex*/) override
     {
         notifyHostOn();
+        if (task)
+        {
+            task->resume();
+        }
     }
-    /// Drop all known endpoints when host goes away.
-    void onHostOff() override
+    /// Pause the periodic task and drop all known endpoints when host goes
+    /// away.
+    void onHostOff(uint8_t /*hostIndex*/) override
     {
+        if (task)
+        {
+            task->pause();
+        }
         removeAllEndpoint();
     }
 
     void notifyHostOn();
 
   private:
+    /**
+     * @brief Start (or restart) the periodic routing table discovery task
+     *        that repeatedly invokes run() at the given interval. Called
+     *        once from the constructor.
+     */
+    void startTask(std::chrono::seconds interval);
+
+    const RoutingTableConfig& config;
     std::chrono::steady_clock::time_point hostOnTime{};
+
+    // Periodic routing table discovery task, started via startTask()
+    std::optional<PeriodicTask> task;
 };

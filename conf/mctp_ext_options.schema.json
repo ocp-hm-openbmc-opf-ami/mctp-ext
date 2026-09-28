@@ -14,13 +14,6 @@
                     "const": "MCTPGeneralSetting",
                     "description": "Entity Manager configuration type"
                 },
-                "DefaultLocalEid": {
-                    "type": "integer",
-                    "minimum": 8,
-                    "maximum": 254,
-                    "default": 10,
-                    "description": "Default local EID for MCTP endpoints"
-                },
                 "RoutingTablePollingInterval": {
                     "type": "integer",
                     "minimum": 1,
@@ -62,19 +55,30 @@
                     "default": "enabled",
                     "description": "Enable MCTP I2C ARP mode support"
                 },
-                "Whitelist": {
+                "ArpIgnoreList": {
                     "type": "array",
                     "items": {
                         "type": "string",
                         "pattern": "^[0-9a-fA-F]{1,4}$"
                     },
-                    "description": "I2C address whitelist for MCTP device discovery (hex)"
+                    "description": "I2C ARP ignore list - keep original address for these (hex)"
                 },
                 "PollingInterval": {
                     "type": "integer",
                     "minimum": 1,
                     "default": 30,
                     "description": "I2C discovery poll interval in seconds"
+                },
+                "MTU": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "MCTP MTU for I2C transport (bytes); 0 or omitted = transport default"
+                },
+                "OwnEID": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 254,
+                    "description": "Configured local EID for I2C"
                 }
             },
             "required": ["Name", "Type"],
@@ -131,12 +135,6 @@
                     "const": "MCTPI3CConfiguration",
                     "description": "Entity Manager configuration type"
                 },
-                "SoC": {
-                    "type": "string",
-                    "enum": ["aspeed-2600", "aspeed-2700", "nuvoton"],
-                    "default": "aspeed-2600",
-                    "description": "Target SoC platform selection"
-                },
                 "Enabled": {
                     "type": "string",
                     "enum": ["enabled", "disabled"],
@@ -149,25 +147,26 @@
                     "default": 8,
                     "description": "MCTP network number for I3C transport"
                 },
-                "BusOwnerEID": {
-                    "type": "integer",
-                    "minimum": 8,
-                    "maximum": 254,
-                    "default": 10,
-                    "description": "Default local EID when BMC is bus owner on I3C"
-                },
-                "EndpointEID": {
-                    "type": "integer",
-                    "minimum": 8,
-                    "maximum": 254,
-                    "default": 11,
-                    "description": "Default local EID when BMC is endpoint on I3C"
-                },
                 "PollingInterval": {
                     "type": "integer",
                     "minimum": 1,
                     "default": 120,
                     "description": "I3C discovery poll interval in seconds"
+                },
+                "MTU": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "MCTP MTU for I3C transport (bytes); 0 or omitted = transport default"
+                },
+                "OwnEID": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 254,
+                    "description": "Configured local EID for I3C"
+                },
+                "PhysicalLinkName": {
+                    "type": "string",
+                    "description": "I3C MCTP link name for this physical interface (e.g. mctpi3c4). MCTPI3CTarget devices are mapped onto the matching interface by the bus number parsed from this name, so multiple MCTPI3CConfiguration entries with distinct links/Nets can coexist."
                 }
             },
             "required": ["Name", "Type"],
@@ -193,9 +192,13 @@
                 },
                 "Role": {
                     "type": "string",
-                    "enum": ["endpoint", "bus-owner"],
+                    "enum": ["endpoint", "bridge", "bus-owner", "topmostBusOwner"],
                     "default": "endpoint",
-                    "description": "Device role: endpoint (BMC is bus owner) or busowner (remote is bus owner)"
+                    "description": "Device role: endpoint, bridge, bus-owner, or topmostBusOwner"
+                },
+                "PhysicalLinkName": {
+                    "type": "string",
+                    "description": "Optional override of the I3C MCTP link name (e.g., mctpi3c0)"
                 },
                 "Address": {
                     "type": "array",
@@ -210,8 +213,7 @@
                 },
                 "PidMask": {
                     "type": "string",
-                    "pattern": "^(0x)?[0-9a-fA-F]+$|^0$",
-                    "description": "PID mask for bus owner matching (hex, for busowner devices)"
+                    "description": "PID regex matched against the sysfs `pid` string for bus-owner devices (e.g. \"20a00b0.000\", \"4cd.{8}\")"
                 },
                 "SecondaryBusOwner": {
                     "type": "boolean",
@@ -221,7 +223,44 @@
                 "I3CTarget": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Whether the remote device is an I3C target (not a bus master)"
+                    "description": "Whether the BMC is an I3C target for this link. This only controls I3C scanning and interface-name selection."
+                },
+                "OwnEID": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 254,
+                    "description": "Configured local EID for this I3C device"
+                },
+                "EIDPool": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 254
+                    },
+                    "description": "Downstream EID pool advertised by this bus-owner device (matches oks MctpBusOwnerConfig.EIDPool: {start, end})"
+                },
+                "Net": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional per-device MCTP network ID; overrides the I3C transport Net for shared-EID/pool D-Bus operations"
+                },
+                "UseSharedEID": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Endpoint-role only: do not pre-install a local EID; wait for an EID assigned by the bus owner on the same network and copy it to this interface (mirrors oks MctpMultiValConfig.UseSharedEID)"
+                },
+                "RequestEIDPool": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 254,
+                    "default": 0,
+                    "description": "Endpoint-role only: number of EIDs this endpoint requests from the upstream bus owner (mirrors oks RequestEIDPool / SharedRequestEIDPool); 0 = no pool requested"
+                },
+                "WaitForPoolId": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Bus-owner role only: skip AssignEndpoint; mctpd assigns EID after receiving pool-ID command from the upstream bus owner"
                 },
                 "StaticEndpointID": {
                     "type": "string",
@@ -267,6 +306,21 @@
                     "minimum": 1,
                     "default": 60,
                     "description": "PCIe discovery poll interval in seconds"
+                },
+                "MTU": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "MCTP MTU for PCIe transport (bytes); 0 or omitted = transport default"
+                },
+                "PhysicalLinkName": {
+                    "type": "string",
+                    "description": "Optional override of the PCIe MCTP link name (e.g., mctppci0)"
+                },
+                "OwnEID": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 254,
+                    "description": "Configured local EID for PCIe;"
                 }
             },
             "required": ["Name", "Type"],
@@ -308,6 +362,17 @@
                     "minimum": 1,
                     "default": 60,
                     "description": "USB discovery poll interval in seconds"
+                },
+                "MTU": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "MCTP MTU for USB transport (bytes); 0 or omitted = transport default"
+                },
+                "OwnEID": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 254,
+                    "description": "Configured local EID for USB"
                 }
             },
             "required": ["Name", "Type"],
