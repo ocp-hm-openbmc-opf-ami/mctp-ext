@@ -7,7 +7,6 @@
 
 #include <phosphor-logging/lg2.hpp>
 
-#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -26,15 +25,32 @@ MCTPUSBDiscovery::MCTPUSBDiscovery(
     debug("MCTPUSBDiscovery initialized: pollingInterval={POLL}", "POLL",
           config.pollingInterval.count());
 
+    startTask(config.pollingInterval);
+
     // Initialize libusb hotplug support
     if (config.hotplugEnabled)
+    {
         initializeHotplug();
+        startHotplugPollTask();
+    }
 }
 
 MCTPUSBDiscovery::~MCTPUSBDiscovery()
 {
     if (config.hotplugEnabled)
         shutdownHotplug();
+}
+
+void MCTPUSBDiscovery::startTask(std::chrono::seconds interval)
+{
+    task.emplace(bus->get_io_context(), interval, [this]() { run(); });
+}
+
+void MCTPUSBDiscovery::startHotplugPollTask()
+{
+    hotplugPollTask.emplace(bus->get_io_context(),
+                            std::chrono::milliseconds(100),
+                            [this]() { handleLibusbEvents(); });
 }
 
 void MCTPUSBDiscovery::run()
@@ -119,10 +135,11 @@ void MCTPUSBDiscovery::enumerateTargets()
         // Ensure interface is up and local EID is configured
         {
             uint8_t eid = target.ownEid.empty()
-                              ? config.localEid
-                              : static_cast<uint8_t>(
-                                    std::stoul(target.ownEid, nullptr, 0));
-            if (!ensureInterfaceReady(target.interface, eid, config.usbNet))
+                ? config.ownEID
+                : static_cast<uint8_t>(
+                      std::stoul(target.ownEid, nullptr, 0));
+            if (!ensureInterfaceReady(target.interface, eid, config.usbNet,
+                                      config.mtu))
             {
                 warning(
                     "USB target {NAME}: interface {INTF} not ready, skipping",
@@ -178,7 +195,8 @@ void MCTPUSBDiscovery::enumerateMCTPNetlinkInterfaces()
         debug("Found MCTP netlink interface: {NAME}", "NAME", ifname);
 
         // Ensure interface is up and local EID is configured
-        if (!ensureInterfaceReady(ifname, config.localEid, config.usbNet))
+        if (!ensureInterfaceReady(ifname, config.ownEID, config.usbNet,
+                                  config.mtu))
         {
             warning("Interface {NAME} not ready, skipping", "NAME", ifname);
             continue;
@@ -397,11 +415,10 @@ int MCTPUSBDiscovery::handleDeviceArrived(libusb_device* device)
 
     // Ensure interface is up and local EID is configured
     {
-        uint8_t eid =
-            ownEid.empty()
-                ? config.localEid
-                : static_cast<uint8_t>(std::stoul(ownEid, nullptr, 0));
-        if (!ensureInterfaceReady(netlinkName, eid, config.usbNet))
+        uint8_t eid = ownEid.empty()
+            ? config.ownEID
+            : static_cast<uint8_t>(std::stoul(ownEid, nullptr, 0));
+        if (!ensureInterfaceReady(netlinkName, eid, config.usbNet, config.mtu))
         {
             warning("Hotplug: interface {INTF} not ready, skipping", "INTF",
                     netlinkName);
@@ -704,3 +721,4 @@ void MCTPUSBDiscovery::manageDeviceViaReactor(const std::string& interfaceName,
     }
 }
 #endif
+

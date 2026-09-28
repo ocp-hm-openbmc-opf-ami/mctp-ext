@@ -2,7 +2,11 @@
 
 #include "MCTPDeviceRepository.hpp"
 #include "MCTPEndpoint.hpp"
+#include "MCTPReactorConfig.hpp"
 #include "Utils.hpp"
+
+#include <boost/asio/io_context.hpp>
+#include <sdbusplus/asio/connection.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -93,6 +97,26 @@ class MCTPReactor : public std::enable_shared_from_this<MCTPReactor>
     void manageMCTPDevice(const std::string& path,
                           const std::shared_ptr<MCTPDevice>& device);
     void unmanageMCTPDevice(const std::string& path);
+
+    /**
+     * @brief (Re)build the discovery modules, their periodic tasks, and the
+     *        process-wide host power monitor(s) from current configuration.
+     *        Call resetDiscovery() first when rebuilding after a config
+     *        reload; device state tracked by this MCTPReactor is unaffected.
+     */
+    void buildDiscovery(
+        boost::asio::io_context& io,
+        const std::shared_ptr<sdbusplus::asio::connection>& systemBus);
+
+    /**
+     * @brief Tear down the discovery modules, periodic tasks, and host
+     *        power monitor(s) built by buildDiscovery(), e.g. before a
+     *        config reload rebuild.
+     */
+    void resetDiscovery();
+
+    MCTPReactorConfig config;
+    MCTPDiscoveryState discovery;
 
   private:
     static std::optional<std::string> findSMBusInterface(int bus);
