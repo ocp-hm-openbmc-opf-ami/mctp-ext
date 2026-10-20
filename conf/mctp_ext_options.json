@@ -4,109 +4,99 @@
             {
                 "Name": "General",
                 "Type": "MCTPGeneralSetting",
-                "DefaultLocalEid": 10,
                 "RoutingTablePollingInterval": 60
             },
             {
                 "Name": "I2CConfig",
                 "Type": "MCTPI2CConfiguration",
                 "Enabled": "enabled",
-                "Net": 1,
+                "Net": 3,
                 "ArpEnabled": "enabled",
-                "Whitelist": ["12", "13", "1d", "32"],
-                "PollingInterval": 30
+                "ArpIgnoreList": [],
+                "PollingInterval": 30,
+                "MTU": 68,
+                "OwnEID": 8
             },
             {
                 "Name": "I3CConfig",
                 "Type": "MCTPI3CConfiguration",
-                "SoC": "aspeed-2600",
                 "Enabled": "enabled",
-                "Net": 8,
-                "BusOwnerEID": 10,
-                "EndpointEID": 11,
-                "PollingInterval": 120
+                "Net": 3,
+                "PollingInterval": 120,
+                "MTU": 68,
+                "OwnEID": 8
             },
             {
-                "Name": "PFR",
+                "Name": "MCTP_CPU0",
                 "Type": "MCTPI3CTarget",
-                "Bus": 0,
-                "Role":"endpoint",
-                "I3CTarget": true,
-                "Address": [2, 10, 0, 0, 0, 11],
-                "StaticEndpointID": "23"
-            },
-            {
-                "Name": "CPU1",
-                "Type": "MCTPI3CTarget",
-                "Bus": 2,
-                "Role": "bus-owner",
+                "Bus": 1,
+                "Role": "endpoint",
                 "I3CTarget": false,
-                "PidMask": "0x0f",
+                "PidMask": "20a.{4}[08].{2}f",
+                "PhysicalLinkName": "mctpi3c1",
                 "SecondaryBusOwner": false,
+                "OwnEID": 0,
                 "StaticEndpointID": "0"
             },
             {
-                "Name": "CPU2",
+                "Name": "MCTP_PFR",
                 "Type": "MCTPI3CTarget",
                 "Bus": 2,
                 "Role": "bus-owner",
                 "I3CTarget": false,
-                "PidMask": "0x100f",
+                "PidMask": "20a00b0.000",
+                "PhysicalLinkName": "mctpi3c2",
+                "SecondaryBusOwner": false,
+                "OwnEID": 254,
+                "EIDPool": [240, 14],
+                "StaticEndpointID": "0"
+            },
+            {
+                "Name": "MCTP_I3C_PCIe1",
+                "Type": "MCTPI3CTarget",
+                "Bus": 3,
+                "Role": "bus-owner",
+                "I3CTarget": false,
+                "PidMask": "4cd.{8}",
+                "PhysicalLinkName": "mctpi3c3",
+                "SecondaryBusOwner": false,
+                "OwnEID": 8,
+                "EIDPool": [9, 244],
+                "StaticEndpointID": "0"
+            },
+            {
+                "Name": "MCTP_I3C_PCIe2",
+                "Type": "MCTPI3CTarget",
+                "Bus": 2,
+                "Role": "bus-owner",
+                "I3CTarget": false,
+                "PidMask": "4cd.{8}",
+                "PhysicalLinkName": "mctpi3c5",
                 "SecondaryBusOwner": true,
+                "OwnEID": 8,
                 "StaticEndpointID": "0"
             },
             {
                 "Name": "PCIeConfig",
                 "Type": "MCTPPCIeConfiguration",
                 "Enabled": "enabled",
-                "Net": 3,
+                "Net": 1,
                 "Role": "endpoint",
-                "PollingInterval": 60
+                "PollingInterval": 60,
+                "MTU": 68,
+                "PhysicalLinkName": "mctppci0",
+                "OwnEID": 8
             },
             {
                 "Name": "USBConfig",
                 "Type": "MCTPUSBConfiguration",
                 "Enabled": "enabled",
-                "Net": 5,
-                "Hotplug": "disabled",
-                "PollingInterval": 60
-            },
-            {
-                "Name": "IO_Board_SMA_1,CX_2,CX_2,CX_3,CX_3,NVMe_E1S_75",
-                "Type": "MCTPUSBTarget",
-                "Interface" : "mctpusb0",
-                "USBPath": "1-1-2",
-                "OwnEID" : "250",
-                "StaticEndpointID" : "12",
-                "BridgePoolStartEID" : "13",
-                "BridgePoolEndEID": "75",
-                "PollingInterval": "5",
-                "IgnoreEIDs": "71,73"
-            },
-            {
-                "Name": "IO_Board_SMA_1,CX_2,CX_2,CX_3,CX_3,NVMe_E1S_75",
-                "Type": "MCTPUSBTarget",
-                "Interface" : "mctpusb1",
-                "USBPath": "1-1-1",
-                "OwnEID" : "251",
-                "StaticEndpointID" : "20",
-                "BridgePoolStartEID" : "21",
-                "BridgePoolEndEID": "75",
-                "PollingInterval": "5",
-                "IgnoreEIDs": "71,73"
-            },
-            {
-                "Name": "IO_Board_SMA_1,CX_2,CX_2,CX_3,CX_3,NVMe_E1S_75",
-                "Type": "MCTPUSBTarget",
-                "Interface" : "mctpusb2",
-                "USBPath": "1-1-3",
-                "OwnEID" : "252",
-                "StaticEndpointID" : "40",
-                "BridgePoolStartEID" : "41",
-                "BridgePoolEndEID": "75",
-                "PollingInterval": "5",
-                "IgnoreEIDs": "71,73"
+                "Net": 4,
+                "Hotplug": "enabled",
+                "PollingInterval": 60,
+                "MTU": 251,
+                "OwnEID": 8
             }
         ]
     }
-]   
+]

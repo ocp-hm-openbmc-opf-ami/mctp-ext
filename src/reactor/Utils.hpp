@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 #include "VariantVisitors.hpp"
 
 #include <boost/algorithm/string/replace.hpp>
@@ -125,6 +126,10 @@ constexpr const char* get = "Get";
 constexpr const char* set = "Set";
 } // namespace properties
 
+
+// Host0 power namespace is always available: used as the default/fallback
+// in HostStateMonitor::getHostPowerProperties() (case 0) regardless of
+// whether multi-host mode is enabled.
 namespace power
 {
 const static constexpr char* busname = "xyz.openbmc_project.State.Host0";
@@ -132,6 +137,24 @@ const static constexpr char* interface = "xyz.openbmc_project.State.Host";
 const static constexpr char* path = "/xyz/openbmc_project/state/host0";
 const static constexpr char* property = "CurrentHostState";
 } // namespace power
+
+#ifdef MULTI_HOST_MODE_SUPPORT
+namespace power1
+{
+const static constexpr char* busname = "xyz.openbmc_project.State.Host1";
+const static constexpr char* interface = "xyz.openbmc_project.State.Host";
+const static constexpr char* path = "/xyz/openbmc_project/state/host1";
+const static constexpr char* property = "CurrentHostState";
+} // namespace power1
+
+namespace power2
+{
+const static constexpr char* busname = "xyz.openbmc_project.State.Host2";
+const static constexpr char* interface = "xyz.openbmc_project.State.Host";
+const static constexpr char* path = "/xyz/openbmc_project/state/host2";
+const static constexpr char* property = "CurrentHostState";
+} // namespace power2
+#endif
 
 namespace chassis
 {

@@ -46,14 +46,16 @@ class MCTPDiscovery
      * @brief Host power-on event hook (default: no-op).
      *        Discovery modules override this to reset state and re-run
      *        discovery when the host comes up.
+     * @param hostIndex Index (0, 1, 2) of the host that powered on
      */
-    virtual void onHostOn() {}
+    virtual void onHostOn(uint8_t /*hostIndex*/) {}
 
     /**
      * @brief Host power-off event hook (default: no-op).
      *        Discovery modules override this to release per-host resources.
+     * @param hostIndex Index (0, 1, 2) of the host that powered off
      */
-    virtual void onHostOff() {}
+    virtual void onHostOff(uint8_t /*hostIndex*/) {}
 
     /**
      * @brief Platform (eSPI) reset event hook (default: no-op).
@@ -65,10 +67,48 @@ class MCTPDiscovery
     /**
      * @brief Fan-out helpers: invoke the matching hook on every registered
      *        MCTPDiscovery instance. Safe to call from the reactor thread.
+     * @param hostIndex Index (0, 1, 2) of the host that transitioned
      */
-    static void dispatchHostOn();
-    static void dispatchHostOff();
+    static void dispatchHostOn(uint8_t hostIndex);
+    static void dispatchHostOff(uint8_t hostIndex);
     static void dispatchPlatformReset();
+
+    /**
+     * @brief Create the process-wide host power state monitor(s). Each
+     *        MCTPDiscovery subclass is responsible for pausing/resuming
+     *        its own periodic task(s) (if any) from its onHostOn()/
+     *        onHostOff() overrides. Single-host mode creates one monitor
+     *        for Host0; multi-host mode (MULTI_HOST_MODE_SUPPORT) creates
+     *        monitors for Host1 and Host2.
+     * @param connection D-Bus connection used to watch host power state
+     */
+    static void initHostMonitoring(
+        const std::shared_ptr<sdbusplus::asio::connection>& connection);
+
+    /**
+     * @brief Destroy all host power state monitors created by
+     *        initHostMonitoring(). Call before rebuilding the discovery
+     *        stack (e.g. on config reload) so stale monitors don't linger.
+     */
+    static void resetHostMonitoring();
+
+    /**
+     * @brief Check if any monitored host is currently powered on
+     */
+    static bool isAnyHostOn();
+
+    /**
+     * @brief Get power state of all monitored hosts (order matches creation
+     *        order, not raw host index values)
+     */
+    static std::vector<bool> getHostStates();
+
+    /**
+     * @brief Number of hosts currently being monitored (1 in single-host
+     *        mode, 2 in multi-host mode, 0 if initHostMonitoring() hasn't
+     *        been called yet)
+     */
+    static std::size_t hostMonitorCount();
 
     /**
      * @brief Remove all endpoints by enumerating D-Bus endpoint objects and
@@ -95,10 +135,11 @@ class MCTPDiscovery
      * @param interfaceName Network interface name (e.g., "mctpusb1")
      * @param eid Expected local EID
      * @param net MCTP network number
+     * @param mtu Optional MTU to set on the link (default 68 = MCTP minimum)
      * @return true if the interface is up with the correct local EID
      */
     bool ensureInterfaceReady(const std::string& interfaceName, uint8_t eid,
-                              int net, uint32_t mtu = 0);
+                              int net, uint32_t mtu = 68);
 
     /**
      * @brief Response from AssignEndpoint D-Bus method call

@@ -5,13 +5,16 @@
 #include "MCTPConstants.hpp"
 #include "MCTPDiscovery.hpp"
 #include "MCTPReactorConfig.hpp"
+#include "PeriodicTask.hpp"
 
 #include <boost/asio/steady_timer.hpp>
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/asio/connection.hpp>
 
+#include <chrono>
 #include <format>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -46,15 +49,25 @@ class MCTPI2CDiscovery : public MCTPDiscovery
         return "I2C";
     }
 
-    /// Reset all state and restart discovery on host power-on.
-    void onHostOn() override
+    /// Resume the hotplug task and reset all state to restart discovery
+    /// on host power-on.
+    void onHostOn(uint8_t /*hostIndex*/) override
     {
+        if (hotplugTask)
+        {
+            hotplugTask->resume();
+        }
         scheduleDelayedRun("HostOn");
     }
 
-    /// Clear state on host power-off, then re-discover after a delay.
-    void onHostOff() override
+    /// Pause the hotplug task, clear state on host power-off, then
+    /// re-discover after a delay once resumed.
+    void onHostOff(uint8_t /*hostIndex*/) override
     {
+        if (hotplugTask)
+        {
+            hotplugTask->pause();
+        }
         scheduleDelayedRun("HostOff");
     }
 
@@ -111,6 +124,16 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     // Timer for delayed discovery after host events
     boost::asio::steady_timer delayedRunTimer{bus->get_io_context()};
 
+    /**
+     * @brief Start the periodic I2C hotplug discovery task that repeatedly
+     *        invokes run() at the given interval. Called once from the
+     *        constructor.
+     */
+    void startHotplugTask(std::chrono::seconds interval);
+
+    // Periodic hotplug discovery task, started via startHotplugTask()
+    std::optional<PeriodicTask> hotplugTask;
+
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
     std::shared_ptr<MCTPReactor> reactor;
     void manageDeviceViaReactor(std::uint8_t busNum, std::uint8_t addr,
@@ -124,9 +147,6 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     // original address is in this list, keep (assign back) its original
     // address instead of assigning a new one.
     std::set<std::uint8_t> arpIgnoreAddresses = {0x53};
-
-    // Default whitelist: "12 13 1d 32"
-    std::set<std::string> whitelist = {"12", "13", "1d", "32"};
 
     static constexpr std::uint8_t minBusNum = 16;
     static constexpr std::uint32_t i2cDefaultMtu = 254;
@@ -206,16 +226,6 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     bool isEEPROMAddress(std::uint8_t addr) const;
 
     /**
-     * @brief Get list of responding I2C addresses in a range via ioctl
-     * @param busNum I2C bus number
-     * @param startAddr Start address (e.g., 0x08)
-     * @param endAddr End address (e.g., 0x77)
-     * @return Vector of responding addresses
-     */
-    std::vector<std::uint8_t> scanI2CRange(
-        std::uint8_t busNum, std::uint8_t startAddr, std::uint8_t endAddr);
-
-    /**
      * @brief Get MCTP neighbors using netlink API
      */
     std::vector<MCTPNeighbor> getNeighborsViaNetlink();
@@ -247,11 +257,6 @@ class MCTPI2CDiscovery : public MCTPDiscovery
     bool isForbidden(const std::string& hexAddr) const;
 
     /**
-     * @brief Check if address is in the whitelist
-     */
-    bool isInWhitelist(const std::string& hexAddr) const;
-
-    /**
      * @brief Check if a bus has MUX child buses (i2c-N subdirectories)
      * @param busNum I2C bus number
      * @return true if the bus has MUX children
@@ -262,11 +267,6 @@ class MCTPI2CDiscovery : public MCTPDiscovery
      * @brief Phase 1: Validate existing routes
      */
     void validateExistingRoutes();
-
-    /**
-     * @brief Phase 2: Scan for new devices
-     */
-    void scanForNewDevices();
 
     /**
      * @brief Scan configured device list and assign endpoints for undiscovered
@@ -310,14 +310,12 @@ class MCTPI2CDiscovery : public MCTPDiscovery
                         std::vector<std::uint8_t>& readBuffer);
 
     /**
-     * @brief Check if a bus/address is configured with a static EID
+     * @brief Check if a bus is a MUX parent (has virtual child buses)
+     * A root bus with MUX children should not be scanned directly.
      * @param busNum I2C bus number
-     * @param hexAddr Hex string of the I2C address
-     * @return true if the device is in config.devices with a non-empty
-     * staticEndpointId
+     * @return true if the bus has MUX child buses
      */
-    bool isConfiguredStaticDevice(std::uint8_t busNum,
-                                  const std::string& hexAddr) const;
+    bool isMuxParentBus(std::uint8_t busNum) const;
 
     /**
      * @brief Remove MCTP neighbor at a given address on an interface

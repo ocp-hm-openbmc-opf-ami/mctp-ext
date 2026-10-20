@@ -27,7 +27,7 @@ constexpr std::string_view interfaceIface =
 constexpr std::string_view entityManagerService =
     "xyz.openbmc_project.EntityManager";
 constexpr std::string_view inventoryBasePath =
-    "/xyz/openbmc_project/inventory/";
+    "/xyz/openbmc_project/inventory";
 
 // Reactor D-Bus name
 constexpr std::string_view reactorService = "xyz.openbmc_project.MCTPReactor";

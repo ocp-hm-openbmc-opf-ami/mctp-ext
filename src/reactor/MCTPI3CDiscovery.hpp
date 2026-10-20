@@ -28,9 +28,11 @@ struct I3CMctpDevice
 {
     int busNumber = 0;
     std::string name;
-    uint16_t pidMask = 0;
+    std::string pidMask;
     std::string role;
-    bool isTarget = true;
+    std::string physicalLinkName;
+    // BMC I3C physical mode; used only for scanning and interface naming.
+    bool isTarget = false;
     bool isMctpBridge = false;
     bool deviceRegistered = false;
     bool detected = false;
@@ -38,7 +40,17 @@ struct I3CMctpDevice
     uint8_t hwAddr[kI3cPidLen] = {};
     uint8_t dynamicAddr = 0;
     uint8_t localEid = 0;
+    uint8_t configuredOwnEID = 0;
+    std::vector<uint8_t> eidPool; // {startEID, poolSize} for bus-owner role
     bool isSecondaryBusOwner = false;
+    // Endpoint-role shared-EID / pool-request (mirrors oks
+    // MctpMultiValConfig.UseSharedEID / RequestEIDPool).
+    bool useSharedEID = false;
+    uint8_t requestEIDPool = 0;
+    // Optional per-device MCTP network ID; 0 = use I3C transport net.
+    uint16_t netOverride = 0;
+    // When true, skip AssignEndpoint; mctpd assigns EID after pool-ID from BO.
+    bool waitForPoolId = false;
 };
 
 /**
@@ -65,7 +77,7 @@ class MCTPI3CDiscovery : public MCTPDiscovery
     /// Trigger pwrResetHandler() once per power cycle. Called by both the
     /// HostOn and PlatformReset hooks; the second call within the same
     /// power cycle is suppressed by the internal latch.
-    void onHostOn() override
+    void onHostOn(uint8_t /*hostIndex*/) override
     {
         triggerPwrReset("HostOn");
     }
@@ -74,7 +86,7 @@ class MCTPI3CDiscovery : public MCTPDiscovery
         triggerPwrReset("PlatformReset");
     }
     /// Clear the once-per-cycle latch so the next power-on re-arms.
-    void onHostOff() override
+    void onHostOff(uint8_t /*hostIndex*/) override
     {
         resetTriggered = false;
     }
@@ -93,9 +105,8 @@ class MCTPI3CDiscovery : public MCTPDiscovery
     // State flags (ported from daemon globals)
     bool pwrResetInProgress = false;
     int mctpI3cNet = DEFAULT_I3C_NET;
-    uint8_t busownerLocalEid = DEFAULT_I3C_BUSOWNER_EID;
-    uint8_t endpointLocalEid = DEFAULT_I3C_ENDPOINT_EID;
-    std::string platform = "aspeed-2600";
+    uint32_t mtu = DEFAULT_MTU;
+    bool waitForEidEnabled = false;
 
     // --- Helper functions ported from daemon ---
 
@@ -110,6 +121,15 @@ class MCTPI3CDiscovery : public MCTPDiscovery
 
     /// Trigger I3C kernel device discovery on buses
     void discoverI3CDevices();
+
+    /// Discover MCTP endpoints behind I3C hubs by writing 0xff to each
+    /// hub's sysfs `detect` file. Hubs are identified by `dcr == 0xc2`.
+    /// Performs an initial bounded retry loop to wait for hubs to appear,
+    /// then re-issues the broadcast a few additional times with a delay
+    /// to give late-arriving downstream endpoints a chance to respond.
+    /// Ported from oks I3CTopmostBusOwner::discoverPhysicalEndpoints
+    /// (sysfs-only; no D-Bus I3CDeviceManager dependency).
+    void discoverPhysicalEndpoints();
 
     /// Convert 6-byte hardware address to hex string
     std::string convertHwAddrToPidString(
@@ -139,6 +159,41 @@ class MCTPI3CDiscovery : public MCTPDiscovery
 
     /// Send DiscoveryNotify to codeconstruct mctpd via D-Bus
     bool sendDiscoveryNotify(const I3CMctpDevice& device);
+
+    /// Bus-owner role: call mctpd AssignEndpoint(hwAddr) over D-Bus.
+    /// Mirrors oks TopmostBusOwner::discoveryTask endpoint-assign step.
+    bool assignEndpoint(const I3CMctpDevice& device);
+
+    /// Resolve effective MCTP network ID for a device (per-device override
+    /// when non-zero, otherwise the I3C transport-wide net).
+    uint16_t deviceNet(const I3CMctpDevice& device) const
+    {
+        return device.netOverride != 0 ? device.netOverride
+                                       : static_cast<uint16_t>(mctpI3cNet);
+    }
+
+    /// Push EIDPool {startEID, poolSize} to mctpd Network1 property.
+    /// Mirrors oks MCTPDWrapperImpl::setEIDPool. Pass {0, 0} to clear.
+    bool setEIDPoolDbus(uint16_t network, uint8_t startEID,
+                       uint8_t poolSize);
+
+    /// Push RequestPoolSize to mctpd Interface1 property.
+    /// Mirrors oks MCTPDWrapperImpl::setRequiredPoolSize. Endpoint role
+    /// only; tells the upstream bus owner how many EIDs we need.
+    bool setRequestPoolSizeDbus(const std::string& physicalLink,
+                                uint8_t poolSize);
+
+    /// Endpoint role: poll mctpd until a non-null local EID appears on
+    /// the device's network (assigned by the bus owner via SetEID), then
+    /// install it on this interface. Mirrors oks waitForSharedEID +
+    /// "copy network local EID to endpoint interface" logic.
+    /// Returns the assigned EID, or 0 on timeout.
+    uint8_t waitForAssignedEID(const I3CMctpDevice& device,
+                               std::chrono::seconds timeout);
+
+    /// Resolve kernel/D-Bus interface name for a device
+    /// (physicalLinkName override -> mctpi3cN -> findI3CTargetInterface()).
+    std::string resolveInterfaceName(const I3CMctpDevice& device) const;
 
     /// Find actual kernel interface name matching 'mctpi3c-target*' or
     /// 'mctpi3c_target*' by scanning /sys/class/net/ with retry

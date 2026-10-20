@@ -5,14 +5,17 @@
 #include "MCTPConstants.hpp"
 #include "MCTPDiscovery.hpp"
 #include "MCTPReactorConfig.hpp"
+#include "PeriodicTask.hpp"
 
 #include <libusb-1.0/libusb.h>
 
 #include <sdbusplus/asio/connection.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -41,8 +44,11 @@ class MCTPUSBDiscovery : public MCTPDiscovery
         return "USB";
     }
 
+    /// USB discovery is host-state-independent: keep running when host is off.
+    void onHostOff(uint8_t /*hostIndex*/) override { resetDiscoveryState(); }
+
     /// Reset USB enumeration state on host power-on.
-    void onHostOn() override
+    void onHostOn(uint8_t /*hostIndex*/) override
     {
         resetDiscoveryState();
     }
@@ -84,7 +90,29 @@ class MCTPUSBDiscovery : public MCTPDiscovery
     }
 
   private:
+    /**
+     * @brief Start (or restart) the periodic USB discovery task that
+     *        repeatedly invokes run() at the given interval. USB discovery
+     *        is host-state-independent, so this task is not registered
+     *        with MCTPDiscovery::initHostMonitoring(). Called once from
+     *        the constructor.
+     */
+    void startTask(std::chrono::seconds interval);
+
+    /**
+     * @brief Start (or restart) the periodic libusb hotplug event pump
+     *        (calls handleLibusbEvents() every 100ms). Called once from
+     *        the constructor when hotplug is enabled.
+     */
+    void startHotplugPollTask();
+
     const USBDiscoveryConfig& config;
+
+    // Periodic USB discovery task, started via startTask()
+    std::optional<PeriodicTask> task;
+
+    // Periodic libusb hotplug event pump, started via startHotplugPollTask()
+    std::optional<PeriodicTask> hotplugPollTask;
 
 #if REGISTER_REACTOR_MCTP_DEVICE_REPOSITORY_ENABLED
     std::shared_ptr<MCTPReactor> reactor;
